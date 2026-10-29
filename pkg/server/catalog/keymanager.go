@@ -10,6 +10,7 @@ import (
 	"github.com/spiffe/spire/pkg/server/plugin/keymanager/hashicorpvault"
 	kmipkey "github.com/spiffe/spire/pkg/server/plugin/keymanager/kmip"
 	"github.com/spiffe/spire/pkg/server/plugin/keymanager/memory"
+	"github.com/spiffe/spire/pkg/server/plugin/keymanager/pqsql"
 )
 
 type keyManagerRepository struct {
@@ -37,6 +38,7 @@ func (repo *keyManagerRepository) BuiltIns() []catalog.BuiltIn {
 		kmipkey.BuiltIn(),
 		hashicorpvault.BuiltIn(),
 		memory.BuiltIn(),
+		pqsql.BuiltIn(),
 	}
 }
 
