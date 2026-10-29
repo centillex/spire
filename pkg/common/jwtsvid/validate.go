@@ -3,12 +3,16 @@ package jwtsvid
 import (
 	"context"
 	"crypto"
+	"crypto/mldsa"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
+	"github.com/spiffe/spire/pkg/common/pqjose"
 )
 
 type KeyStore interface {
@@ -38,6 +42,10 @@ func (t *keyStore) FindPublicKey(_ context.Context, td spiffeid.TrustDomain, key
 }
 
 func ValidateToken(ctx context.Context, token string, keyStore KeyStore, audience []string) (spiffeid.ID, map[string]any, error) {
+	if mlDSA, claims, claimsMap, err := ParseMLDSA(token); err == nil {
+		return validateMLDSA(ctx, mlDSA, claims, claimsMap, keyStore, audience)
+	}
+
 	tok, err := jwt.ParseSigned(token, AllowedSignatureAlgorithms)
 	if err != nil {
 		return spiffeid.ID{}, nil, fmt.Errorf("unable to parse JWT token: %w", err)
@@ -97,6 +105,50 @@ func ValidateToken(ctx context.Context, token string, keyStore KeyStore, audienc
 			err = fmt.Errorf("expected audience in %q (audience=%q)", audience, claims.Audience)
 		}
 		return spiffeid.ID{}, nil, err
+	}
+
+	return spiffeID, claimsMap, nil
+}
+
+func validateMLDSA(ctx context.Context, tok *pqjose.Token, claims *MLDSAClaims, claimsMap map[string]any, keyStore KeyStore, audience []string) (spiffeid.ID, map[string]any, error) {
+	keyID := tok.Header().KeyID
+	if keyID == "" {
+		return spiffeid.ID{}, nil, errors.New("token header missing key id")
+	}
+	if claims.Subject == "" {
+		return spiffeid.ID{}, nil, errors.New("token missing subject claim")
+	}
+	if claims.Expiry == nil {
+		return spiffeid.ID{}, nil, errors.New("token missing exp claim")
+	}
+	spiffeID, err := spiffeid.FromString(claims.Subject)
+	if err != nil {
+		return spiffeid.ID{}, nil, fmt.Errorf("token has an invalid subject claim: %w", err)
+	}
+
+	key, err := keyStore.FindPublicKey(ctx, spiffeID.TrustDomain(), keyID)
+	if err != nil {
+		return spiffeid.ID{}, nil, err
+	}
+	publicKey, ok := key.(*mldsa.PublicKey)
+	if !ok {
+		return spiffeid.ID{}, nil, fmt.Errorf("JWT authority %q is not an ML-DSA-65 public key", keyID)
+	}
+	if err := tok.Verify(publicKey); err != nil {
+		return spiffeid.ID{}, nil, err
+	}
+
+	now := time.Now()
+	if !claims.Expiry.Time().After(now) {
+		return spiffeid.ID{}, nil, errors.New("token has expired")
+	}
+	if claims.NotBefore != nil && claims.NotBefore.Time().After(now) {
+		return spiffeid.ID{}, nil, errors.New("token is not valid yet")
+	}
+	if len(audience) > 0 && !slices.ContainsFunc(audience, func(expected string) bool {
+		return slices.Contains(claims.Audience, expected)
+	}) {
+		return spiffeid.ID{}, nil, fmt.Errorf("expected audience in %q (audience=%q)", audience, claims.Audience)
 	}
 
 	return spiffeID, claimsMap, nil

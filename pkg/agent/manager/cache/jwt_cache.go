@@ -17,6 +17,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire/pkg/agent/client"
 	"github.com/spiffe/spire/pkg/common/jwtsvid"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/telemetry"
 	"github.com/spiffe/spire/pkg/common/telemetry/agent"
 )
@@ -146,6 +147,13 @@ func (c *JWTSVIDCache) TaintJWTSVIDs(ctx context.Context, taintedJWTAuthorities 
 }
 
 func getKeyIDFromSVIDToken(svidToken string) (string, error) {
+	if token, err := pqjose.ParseJWT(svidToken); err == nil {
+		if token.Header().KeyID == "" {
+			return "", errors.New("missing key ID in token header of minted JWT-SVID")
+		}
+		return token.Header().KeyID, nil
+	}
+
 	token, err := jwt.ParseSigned(svidToken, jwtsvid.AllowedSignatureAlgorithms)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse JWT-SVID: %w", err)

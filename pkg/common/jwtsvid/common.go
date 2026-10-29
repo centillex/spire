@@ -8,6 +8,16 @@ import (
 )
 
 func GetTokenExpiry(token string) (time.Time, time.Time, error) {
+	if _, claims, _, err := ParseMLDSA(token); err == nil {
+		if claims.IssuedAt == nil {
+			return time.Time{}, time.Time{}, errors.New("JWT missing iat claim")
+		}
+		if claims.Expiry == nil {
+			return time.Time{}, time.Time{}, errors.New("JWT missing exp claim")
+		}
+		return claims.IssuedAt.Time().UTC(), claims.Expiry.Time().UTC(), nil
+	}
+
 	tok, err := jwt.ParseSigned(token, AllowedSignatureAlgorithms)
 	if err != nil {
 		return time.Time{}, time.Time{}, err

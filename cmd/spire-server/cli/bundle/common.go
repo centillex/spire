@@ -16,6 +16,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire-api-sdk/proto/spire/api/types"
 	"github.com/spiffe/spire/cmd/spire-server/util"
+	"github.com/spiffe/spire/pkg/common/bundleutil"
 	"github.com/spiffe/spire/pkg/common/jwtutil"
 	"github.com/spiffe/spire/pkg/common/witutil"
 )
@@ -76,7 +77,7 @@ func printBundle(out io.Writer, bundle *types.Bundle) error {
 		return err
 	}
 
-	docBytes, err := b.Marshal()
+	docBytes, err := bundleutil.Marshal(b)
 	if err != nil {
 		return err
 	}

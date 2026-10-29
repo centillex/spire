@@ -1,6 +1,7 @@
 package bundleutil
 
 import (
+	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 )
 
 type marshalConfig struct {
@@ -148,6 +150,14 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 
 	if !c.noJWTSVIDKeys {
 		for keyID, jwtSigningKey := range bundle.JWTAuthorities() {
+			if publicKey, ok := jwtSigningKey.(*mldsa.PublicKey); ok {
+				encoded, err := pqjose.MarshalPublicJWKWithUse(keyID, maybeUse(jwtSVIDUse), publicKey)
+				if err != nil {
+					return nil, err
+				}
+				keys = append(keys, json.RawMessage(encoded))
+				continue
+			}
 			keys = append(keys, jose.JSONWebKey{
 				Key:   jwtSigningKey,
 				KeyID: keyID,

@@ -49,6 +49,7 @@ plugins {
 		return path
 	}
 
+	//nolint:unparam // the helper keeps an error return for call-site symmetry
 	parse := func(t *testing.T, path string) (*Config, error) {
 		t.Helper()
 		c, err := ParseFile(path, false)
@@ -67,27 +68,29 @@ plugins {
 		require.True(t, sc.TLSPolicy.RequirePQKEM, "strict_pq must require TLS 1.3 + PQ KEMs")
 	})
 
-	t.Run("token profiles cannot remain enabled", func(t *testing.T) {
+	t.Run("strict PQ accepts the ML-DSA JWT profile", func(t *testing.T) {
 		path := writeConfig(t, false, "ml-dsa-65", "", true)
 		c, err := parse(t, path)
 		require.NoError(t, err)
-		_, err = NewServerConfig(c, logOptions, true)
-		require.ErrorContains(t, err, "disable the JWT-SVID profile")
+		sc, err := NewServerConfig(c, logOptions, true)
+		require.NoError(t, err)
+		require.Equal(t, keymanager.MLDSA65, sc.JWTKeyType)
+		require.False(t, sc.DisableJWTSVIDs)
 	})
 
-	t.Run("ml-dsa token key rejected when tokens enabled", func(t *testing.T) {
-		path := writeConfig(t, false, "ec-p256", "ml-dsa-65", false)
+	t.Run("strict PQ rejects a classical JWT key", func(t *testing.T) {
+		path := writeConfig(t, false, "ml-dsa-65", "ec-p256", true)
 		c, err := parse(t, path)
 		require.NoError(t, err)
 		_, err = NewServerConfig(c, logOptions, true)
-		require.Error(t, err)
+		require.ErrorContains(t, err, "strict PQ requires jwt_key_type")
 	})
 
-	t.Run("classical CA with strict PQ requires token profiles disabled", func(t *testing.T) {
-		path := writeConfig(t, false, "ec-p256", "", true)
+	t.Run("classical CA with strict PQ rejected", func(t *testing.T) {
+		path := writeConfig(t, true, "ec-p256", "", true)
 		c, err := parse(t, path)
 		require.NoError(t, err)
 		_, err = NewServerConfig(c, logOptions, true)
-		require.ErrorContains(t, err, "strict_pq")
+		require.ErrorContains(t, err, "strict")
 	})
 }

@@ -107,6 +107,10 @@ func (v *Validator) ValidateX509SVID(svid *x509.Certificate, id spiffeid.ID) err
 }
 
 func (v *Validator) ValidateWorkloadJWTSVID(rawToken string, id spiffeid.ID) error {
+	if _, claims, _, err := jwtsvid.ParseMLDSA(rawToken); err == nil {
+		return validateMLDSAWorkloadClaims(claims, id, v.clock.Now())
+	}
+
 	token, err := jwt.ParseSigned(rawToken, jwtsvid.AllowedSignatureAlgorithms)
 	if err != nil {
 		return fmt.Errorf("failed to parse JWT-SVID for validation: %w", err)
@@ -118,6 +122,24 @@ func (v *Validator) ValidateWorkloadJWTSVID(rawToken string, id spiffeid.ID) err
 	}
 
 	now := v.clock.Now()
+	switch {
+	case claims.Subject != id.String():
+		return fmt.Errorf(`invalid JWT-SVID "sub" claim: expected %q but got %q`, id, claims.Subject)
+	case claims.Expiry == nil:
+		return errors.New(`invalid JWT-SVID "exp" claim: required but missing`)
+	case !claims.Expiry.Time().After(now):
+		return fmt.Errorf(`invalid JWT-SVID "exp" claim: already expired as of %s`, claims.Expiry.Time().Format(time.RFC3339))
+	case claims.NotBefore != nil && claims.NotBefore.Time().After(now):
+		return fmt.Errorf(`invalid JWT-SVID "nbf" claim: not yet valid until %s`, claims.NotBefore.Time().Format(time.RFC3339))
+	case len(claims.Audience) == 0:
+		return errors.New(`invalid JWT-SVID "aud" claim: required but missing`)
+	case slices.Contains(claims.Audience, ""):
+		return errors.New(`invalid JWT-SVID "aud" claim: contains empty value`)
+	}
+	return nil
+}
+
+func validateMLDSAWorkloadClaims(claims *jwtsvid.MLDSAClaims, id spiffeid.ID, now time.Time) error {
 	switch {
 	case claims.Subject != id.String():
 		return fmt.Errorf(`invalid JWT-SVID "sub" claim: expected %q but got %q`, id, claims.Subject)

@@ -42,7 +42,7 @@ func (h *caHealth) CheckHealth() health.State {
 
 	ctx = health.CheckContext(ctx)
 
-	var publicKey crypto.PublicKey = caHealthKey
+	publicKey := caHealthKey
 	var err error
 	if h.strictPQ {
 		var signer crypto.Signer

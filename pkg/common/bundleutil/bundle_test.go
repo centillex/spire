@@ -3,6 +3,7 @@ package bundleutil
 // Basic imports
 import (
 	"crypto"
+	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -547,4 +548,28 @@ func setupTest(t *testing.T) *bundleTest {
 		witKeyExpired:    &common.PublicKey{NotAfter: expiredKeyTime.Unix()},
 		witKeyNotExpired: &common.PublicKey{NotAfter: nonExpiredKeyTime.Unix()},
 	}
+}
+
+func TestMLDSAJWTBundleRoundTrip(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("pq.example")
+	key, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+
+	bundle := spiffebundle.New(td)
+	require.NoError(t, bundle.AddJWTAuthority("jwt-key", key.PublicKey()))
+
+	encoded, err := MarshalJWTSVIDBundle(bundle)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"kty": "AKP"`)
+	require.Contains(t, string(encoded), `"alg": "ML-DSA-65"`)
+	require.Contains(t, string(encoded), `"use": "jwt-svid"`)
+	require.NotContains(t, string(encoded), `"priv"`)
+
+	parsed, err := Unmarshal(td, encoded)
+	require.NoError(t, err)
+	authority, ok := parsed.FindJWTAuthority("jwt-key")
+	require.True(t, ok)
+	publicKey, ok := authority.(*mldsa.PublicKey)
+	require.True(t, ok)
+	require.True(t, publicKey.Equal(key.PublicKey()))
 }

@@ -10,12 +10,12 @@ plugin never falls back to plaintext or classical keys.
 
 ## Configuration
 
-| Configuration | Description |
-|---|---|
-| `connection_string` | Required. PostgreSQL connection string, e.g. `postgres://user:pass@host:5432/spire?sslmode=verify-full`. |
-| `encryption_key_path` | Required. Path to a 32-byte KEK. The file must not be accessible by group or others. |
-| `refresh_interval` | Optional. How often to check for keys written by another server. Default `2s`. |
-| `max_open_conns` | Optional. Connection pool size. Default `4`. |
+| Configuration         | Description                                                                                              |
+|-----------------------|----------------------------------------------------------------------------------------------------------|
+| `connection_string`   | Required. PostgreSQL connection string, e.g. `postgres://user:pass@host:5432/spire?sslmode=verify-full`. |
+| `encryption_key_path` | Required. Path to a 32-byte KEK. The file must not be accessible by group or others.                     |
+| `refresh_interval`    | Optional. How often to check for keys written by another server. Default `2s`.                           |
+| `max_open_conns`      | Optional. Connection pool size. Default `4`.                                                             |
 
 ```hcl
 KeyManager "pqsql" {

@@ -9,6 +9,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/pqjwk"
 )
 
@@ -45,6 +46,16 @@ func unmarshal(trustDomain spiffeid.TrustDomain, doc *rawBundleDoc) (*spiffebund
 				return nil, fmt.Errorf("failed to parse x509-svid entry %d: %w", i, err)
 			}
 			bundle.AddX509Authority(cert)
+			continue
+		}
+		if use == jwtSVIDUse && keyType == "AKP" {
+			keyID, publicKey, err := pqjose.ParsePublicJWK(raw)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse jwt-svid entry %d: %w", i, err)
+			}
+			if err := bundle.AddJWTAuthority(keyID, publicKey); err != nil {
+				return nil, fmt.Errorf("failed to add jwt-svid entry %d: %w", i, err)
+			}
 			continue
 		}
 

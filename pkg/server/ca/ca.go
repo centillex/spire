@@ -6,6 +6,7 @@ import (
 	"crypto/mldsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire/pkg/common/cryptoutil"
 	"github.com/spiffe/spire/pkg/common/health"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/telemetry"
 	telemetry_server "github.com/spiffe/spire/pkg/common/telemetry/server"
 	"github.com/spiffe/spire/pkg/common/x509util"
@@ -500,7 +502,22 @@ func (ca *CA) signX509SVID(x509CA *X509CA, template *x509.Certificate) ([]*x509.
 }
 
 func (ca *CA) signJWTSVID(jwtKey *JWTKey, claims map[string]any) (string, error) {
-	alg, err := cryptoutil.JoseAlgFromPublicKey(jwtKey.Signer.Public())
+	publicKey := jwtKey.Signer.Public()
+	if mlDSAKey, ok := publicKey.(*mldsa.PublicKey); ok {
+		if mlDSAKey.Parameters() != mldsa.MLDSA65() {
+			return "", fmt.Errorf("JWT signing key uses unsupported parameters %q", mlDSAKey.Parameters())
+		}
+		payload, err := json.Marshal(claims)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal JWT SVID claims: %w", err)
+		}
+		return pqjose.SignJWT(jwtKey.Kid, payload, jwtKey.Signer)
+	}
+	if ca.c.StrictPQ {
+		return "", fmt.Errorf("strict PQ policy: ML-DSA-65 JWT signing key required, got %T", publicKey)
+	}
+
+	alg, err := cryptoutil.JoseAlgFromPublicKey(publicKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to determine JWT key algorithm: %w", err)
 	}

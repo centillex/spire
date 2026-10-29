@@ -196,7 +196,6 @@ func (s *v1Key) signContext(ctx context.Context, digest []byte, opts crypto.Sign
 				HashAlgorithm: s.v1.convertHashAlgorithm(opts.HashFunc()),
 			}
 		}
-
 	}
 	resp, err := s.v1.KeyManagerPluginClient.SignData(ctx, req)
 	if err != nil {

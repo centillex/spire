@@ -267,7 +267,8 @@ func TestKEKValidation(t *testing.T) {
 	require.ErrorContains(t, err, "exactly 32 bytes")
 
 	permissive := filepath.Join(dir, "permissive")
-	require.NoError(t, os.WriteFile(permissive, make([]byte, kekSize), 0644))
+	require.NoError(t, os.WriteFile(permissive, make([]byte, kekSize), 0600))
+	require.NoError(t, os.Chmod(permissive, 0644))
 	_, err = loadKEK(permissive)
 	require.ErrorContains(t, err, "must not be accessible")
 }
@@ -342,7 +343,7 @@ func TestConcurrentSameSlotWritesKeepOneRow(t *testing.T) {
 		wg.Add(1)
 		go func(plugin *Plugin) {
 			defer wg.Done()
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				_, err := plugin.GenerateKey(context.Background(), &keymanagerv1.GenerateKeyRequest{
 					KeyId:   "X509-CA-A",
 					KeyType: keymanagerv1.KeyType_ML_DSA_65,

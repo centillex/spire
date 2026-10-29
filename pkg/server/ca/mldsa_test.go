@@ -7,10 +7,12 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/telemetry"
 	"github.com/spiffe/spire/pkg/server/credtemplate"
 	"github.com/spiffe/spire/pkg/server/credvalidator"
@@ -120,4 +122,85 @@ func testMLDSA65X509Issuance(t *testing.T, params mldsa.Parameters, expectFailur
 	_, err = classicalCA.SignWorkloadX509SVID(t.Context(), WorkloadX509SVIDParams{SPIFFEID: spiffeid.RequireFromPath(td, "/workload"), PublicKey: leafKey.Public(), TTL: time.Minute})
 	require.ErrorContains(t, err, "strict PQ policy")
 	require.NoError(t, caCert.CheckSignature(reparsedLeaf.SignatureAlgorithm, reparsedLeaf.RawTBSCertificate, reparsedLeaf.Signature))
+}
+
+// TestMLDSA65JWTSVIDIssuance exercises the ML-DSA-65 JWT-SVID signing path and
+// the shared credential validator. It is a component test, not deployment
+// evidence.
+func TestMLDSA65JWTSVIDIssuance(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("pq.example")
+	id := spiffeid.RequireFromPath(td, "/workload")
+	mockClock := clock.NewMock(t)
+	mockClock.Set(time.Now().Truncate(time.Second).UTC())
+
+	builder, err := credtemplate.NewBuilder(credtemplate.Config{
+		TrustDomain:   td,
+		Clock:         mockClock,
+		X509CASubject: pkix.Name{CommonName: "ML-DSA TEST CA"},
+		X509CATTL:     10 * time.Minute,
+		X509SVIDTTL:   time.Minute,
+	})
+	require.NoError(t, err)
+	validator, err := credvalidator.New(credvalidator.Config{TrustDomain: td, Clock: mockClock})
+	require.NoError(t, err)
+	serverCA := NewCA(Config{
+		Clock:         mockClock,
+		Metrics:       telemetry.Blackhole{},
+		TrustDomain:   td,
+		CredBuilder:   builder,
+		CredValidator: validator,
+		HealthChecker: fakehealthchecker.New(),
+		StrictPQ:      true,
+	})
+
+	jwtKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	serverCA.SetJWTKey(&JWTKey{
+		Signer:   jwtKey,
+		Kid:      "jwt-key-1",
+		NotAfter: mockClock.Now().Add(time.Hour),
+	})
+
+	token, err := serverCA.SignWorkloadJWTSVID(t.Context(), WorkloadJWTSVIDParams{
+		SPIFFEID: id,
+		TTL:      time.Minute,
+		Audience: []string{"audience.test"},
+	})
+	require.NoError(t, err)
+
+	parsed, err := pqjose.ParseJWT(token)
+	require.NoError(t, err)
+	require.Equal(t, "ML-DSA-65", parsed.Header().Algorithm)
+	require.Equal(t, "jwt-key-1", parsed.Header().KeyID)
+	require.NoError(t, parsed.Verify(jwtKey.PublicKey()))
+
+	var claims struct {
+		Subject  string   `json:"sub"`
+		Audience []string `json:"aud"`
+		Expiry   int64    `json:"exp"`
+	}
+	require.NoError(t, json.Unmarshal(parsed.Claims(), &claims))
+	require.Equal(t, id.String(), claims.Subject)
+	require.Equal(t, []string{"audience.test"}, claims.Audience)
+	require.Greater(t, claims.Expiry, mockClock.Now().Unix())
+
+	require.NoError(t, validator.ValidateWorkloadJWTSVID(token, id))
+
+	// A modified signature must not validate.
+	tampered := []byte(token)
+	if tampered[len(tampered)-1] == 'A' {
+		tampered[len(tampered)-1] = 'B'
+	} else {
+		tampered[len(tampered)-1] = 'A'
+	}
+	tamperedParsed, err := pqjose.ParseJWT(string(tampered))
+	require.NoError(t, err)
+	require.Error(t, tamperedParsed.Verify(jwtKey.PublicKey()))
+
+	// Strict PQ refuses a classical JWT signer rather than falling back.
+	classicalKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serverCA.SetJWTKey(&JWTKey{Signer: classicalKey, Kid: "classical", NotAfter: mockClock.Now().Add(time.Hour)})
+	_, err = serverCA.SignWorkloadJWTSVID(t.Context(), WorkloadJWTSVIDParams{SPIFFEID: id, TTL: time.Minute, Audience: []string{"audience.test"}})
+	require.ErrorContains(t, err, "strict PQ policy")
 }
