@@ -164,6 +164,11 @@ type Config struct {
 
 	// DisableWITSVIDs, if true, WIT-SVID profile is disabled
 	DisableWITSVIDs bool
+
+	// StrictPQ restricts X.509 issuance to ML-DSA-65 keys and signers. It
+	// rejects weaker issuer, agent, and workload keys instead of falling back
+	// to classical algorithms.
+	StrictPQ bool
 }
 
 type ExperimentalConfig struct {

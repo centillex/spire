@@ -3,6 +3,7 @@ package ca
 import (
 	"context"
 	"crypto"
+	"crypto/mldsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -165,6 +166,9 @@ type Config struct {
 	HealthChecker   health.Checker
 	DisableJWTSVIDs bool
 	DisableWITSVIDs bool
+	// StrictPQ restricts X.509 issuance to ML-DSA-65 keys and signers. It is
+	// an explicit opt-in so classical deployments keep existing behavior.
+	StrictPQ bool
 }
 
 type CA struct {
@@ -191,8 +195,9 @@ func NewCA(config Config) *CA {
 	}
 
 	_ = config.HealthChecker.AddCheck("server.ca", &caHealth{
-		ca: ca,
-		td: config.TrustDomain,
+		ca:       ca,
+		td:       config.TrustDomain,
+		strictPQ: config.StrictPQ,
 	})
 
 	return ca
@@ -259,6 +264,10 @@ func (ca *CA) SignDownstreamX509CA(ctx context.Context, params DownstreamX509CAP
 		return nil, err
 	}
 
+	if err := ca.checkPublicKey(params.PublicKey, "downstream X509 CA"); err != nil {
+		return nil, err
+	}
+
 	template, err := ca.c.CredBuilder.BuildDownstreamX509CATemplate(ctx, credtemplate.DownstreamX509CAParams{
 		ParentChain:   caChain,
 		PublicKey:     params.PublicKey,
@@ -283,6 +292,9 @@ func (ca *CA) SignDownstreamX509CA(ctx context.Context, params DownstreamX509CAP
 }
 
 func (ca *CA) SignServerX509SVID(ctx context.Context, params ServerX509SVIDParams) ([]*x509.Certificate, error) {
+	if err := ca.checkPublicKey(params.PublicKey, "server X509-SVID"); err != nil {
+		return nil, err
+	}
 	x509CA, caChain, err := ca.getX509CA()
 	if err != nil {
 		return nil, err
@@ -310,6 +322,9 @@ func (ca *CA) SignServerX509SVID(ctx context.Context, params ServerX509SVIDParam
 }
 
 func (ca *CA) SignAgentX509SVID(ctx context.Context, params AgentX509SVIDParams) ([]*x509.Certificate, error) {
+	if err := ca.checkPublicKey(params.PublicKey, "agent X509-SVID"); err != nil {
+		return nil, err
+	}
 	x509CA, caChain, err := ca.getX509CA()
 	if err != nil {
 		return nil, err
@@ -338,6 +353,9 @@ func (ca *CA) SignAgentX509SVID(ctx context.Context, params AgentX509SVIDParams)
 }
 
 func (ca *CA) SignWorkloadX509SVID(ctx context.Context, params WorkloadX509SVIDParams) ([]*x509.Certificate, error) {
+	if err := ca.checkPublicKey(params.PublicKey, "workload X509-SVID"); err != nil {
+		return nil, err
+	}
 	x509CA, caChain, err := ca.getX509CA()
 	if err != nil {
 		return nil, err
@@ -437,7 +455,39 @@ func (ca *CA) getX509CA() (*X509CA, []*x509.Certificate, error) {
 	if ca.x509CA == nil {
 		return nil, nil, errors.New("X509 CA is not available for signing")
 	}
+	if ca.c.StrictPQ {
+		if ca.x509CA.Signer == nil || ca.x509CA.Certificate == nil {
+			return nil, nil, errors.New("strict PQ policy: X509 CA signer and certificate are required")
+		}
+		if err := checkMLDSA65PublicKey(ca.x509CA.Signer.Public()); err != nil {
+			return nil, nil, fmt.Errorf("strict PQ policy: X509 CA signing key: %w", err)
+		}
+		if err := checkMLDSA65PublicKey(ca.x509CA.Certificate.PublicKey); err != nil {
+			return nil, nil, fmt.Errorf("strict PQ policy: X509 CA certificate: %w", err)
+		}
+		if ca.x509CA.Certificate.SignatureAlgorithm != x509.MLDSA65 {
+			return nil, nil, fmt.Errorf("strict PQ policy: X509 CA certificate signature must be ML-DSA-65")
+		}
+	}
 	return ca.x509CA, ca.x509CAChain, nil
+}
+
+func (ca *CA) checkPublicKey(publicKey crypto.PublicKey, role string) error {
+	if !ca.c.StrictPQ {
+		return nil
+	}
+	if err := checkMLDSA65PublicKey(publicKey); err != nil {
+		return fmt.Errorf("strict PQ policy: %s: %w", role, err)
+	}
+	return nil
+}
+
+func checkMLDSA65PublicKey(publicKey crypto.PublicKey) error {
+	key, ok := publicKey.(*mldsa.PublicKey)
+	if !ok || key == nil || len(key.Bytes()) != mldsa.MLDSA65().PublicKeySize() || key.Parameters() != mldsa.MLDSA65() {
+		return errors.New("public key must be ML-DSA-65")
+	}
+	return nil
 }
 
 func (ca *CA) signX509SVID(x509CA *X509CA, template *x509.Certificate) ([]*x509.Certificate, error) {

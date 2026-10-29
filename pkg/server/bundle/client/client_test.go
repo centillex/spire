@@ -25,6 +25,34 @@ var (
 	serverID    = spiffeid.RequireFromString("spiffe://domain.test/spiffe-bundle-endpoint-server")
 )
 
+// TestClientRejectsRedirect ensures a federation fetch cannot be bounced to a
+// different (possibly weaker or unrelated) endpoint.
+func TestClientRejectsRedirect(t *testing.T) {
+	fetched := false
+	target := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		fetched = true
+	}))
+	defer target.Close()
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	transport := source.Client().Transport.(*http.Transport)
+	client, err := NewClient(ClientConfig{
+		TrustDomain: spiffeid.RequireTrustDomainFromString("domain.test"),
+		EndpointURL: source.URL,
+		mutateTransportHook: func(t *http.Transport) {
+			t.TLSClientConfig = transport.TLSClientConfig
+		},
+	})
+	require.NoError(t, err)
+	_, err = client.FetchBundle(context.Background())
+	require.ErrorContains(t, err, "redirect")
+	require.False(t, fetched, "redirect target must not be contacted")
+}
+
 func TestClient(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -59,6 +87,14 @@ func TestClient(t *testing.T) {
 			serverID:       spiffeid.RequireFromString("spiffe://domain.test/my-spiffe-bundle-endpoint-server"),
 			expectedID:     spiffeid.RequireFromString("spiffe://domain.test/authorized"),
 			fetchBundleErr: fmt.Sprintf(`unexpected ID %q`, spiffeid.RequireFromString("spiffe://domain.test/my-spiffe-bundle-endpoint-server")),
+		},
+		{
+			name:           "redirect rejected",
+			status:         http.StatusTemporaryRedirect,
+			body:           "",
+			serverID:       serverID,
+			expectedID:     serverID,
+			fetchBundleErr: "bundle endpoint redirect (status 307)",
 		},
 		{
 			name:           "non-200 status",

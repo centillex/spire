@@ -3,6 +3,7 @@ package keymanager
 import (
 	"context"
 	"crypto"
+	"crypto/mldsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"io"
@@ -37,6 +38,9 @@ func (v1 V1) GenerateKey(ctx context.Context, id string, keyType KeyType) (Key, 
 		return nil, v1.WrapErr(err)
 	}
 
+	if keyType == MLDSA65 && (resp.PublicKey == nil || resp.PublicKey.Type != keymanagerv1.KeyType_ML_DSA_65) {
+		return nil, v1.Error(codes.Internal, "plugin did not return the requested ML-DSA-65 key")
+	}
 	return v1.makeKey(id, resp.PublicKey)
 }
 
@@ -92,6 +96,12 @@ func (v1 V1) makeKey(id string, pb *keymanagerv1.PublicKey) (Key, error) {
 		return nil, v1.Errorf(codes.Internal, "unable to parse public key PKIX data for key %q: %v", id, err)
 	}
 
+	pub, isMLDSA := publicKey.(*mldsa.PublicKey)
+	if pb.Type == keymanagerv1.KeyType_ML_DSA_65 || isMLDSA {
+		if !isMLDSA || pb.Type != keymanagerv1.KeyType_ML_DSA_65 || len(pub.Bytes()) != mldsa.MLDSA65().PublicKeySize() || pub.Parameters() != mldsa.MLDSA65() {
+			return nil, v1.Error(codes.Internal, "plugin ML-DSA key type does not match PKIX data")
+		}
+	}
 	return &v1Key{
 		v1:          v1,
 		id:          id,
@@ -102,6 +112,8 @@ func (v1 V1) makeKey(id string, pb *keymanagerv1.PublicKey) (Key, error) {
 
 func (v1 *V1) convertKeyType(t KeyType) (keymanagerv1.KeyType, error) {
 	switch t {
+	case MLDSA65:
+		return keymanagerv1.KeyType_ML_DSA_65, nil
 	case KeyTypeUnset:
 		return keymanagerv1.KeyType_UNSPECIFIED_KEY_TYPE, v1.Error(codes.InvalidArgument, "key type is required")
 	case ECP256:
@@ -152,22 +164,40 @@ func (s *v1Key) signContext(ctx context.Context, digest []byte, opts crypto.Sign
 		KeyId: s.id,
 		Data:  digest,
 	}
-	switch opts := opts.(type) {
-	case *rsa.PSSOptions:
-		req.SignerOpts = &keymanagerv1.SignDataRequest_PssOptions{
-			PssOptions: &keymanagerv1.SignDataRequest_PSSOptions{
-				SaltLength:    util.MustCast[int32](opts.SaltLength),
-				HashAlgorithm: s.v1.convertHashAlgorithm(opts.Hash),
-			},
+	if _, ok := s.publicKey.(*mldsa.PublicKey); ok {
+		var context []byte
+		switch o := opts.(type) {
+		case crypto.Hash:
+			if o != 0 {
+				return nil, status.Error(codes.InvalidArgument, "ML-DSA requires the original message, not a prehash")
+			}
+		case *mldsa.Options:
+			if o == nil || len(o.Context) > 255 {
+				return nil, status.Error(codes.InvalidArgument, "invalid ML-DSA context")
+			}
+			context = []byte(o.Context)
+		default:
+			return nil, status.Error(codes.InvalidArgument, "ML-DSA requires explicit pure-message signer options")
 		}
-	case nil:
-		return nil, status.Error(codes.InvalidArgument, "signer opts cannot be nil")
-	default:
-		req.SignerOpts = &keymanagerv1.SignDataRequest_HashAlgorithm{
-			HashAlgorithm: s.v1.convertHashAlgorithm(opts.HashFunc()),
+		req.SignerOpts = &keymanagerv1.SignDataRequest_MldsaOptions{MldsaOptions: &keymanagerv1.SignDataRequest_MLDSAOptions{Context: context}}
+	} else {
+		switch opts := opts.(type) {
+		case *rsa.PSSOptions:
+			req.SignerOpts = &keymanagerv1.SignDataRequest_PssOptions{
+				PssOptions: &keymanagerv1.SignDataRequest_PSSOptions{
+					SaltLength:    util.MustCast[int32](opts.SaltLength),
+					HashAlgorithm: s.v1.convertHashAlgorithm(opts.Hash),
+				},
+			}
+		case nil:
+			return nil, status.Error(codes.InvalidArgument, "signer opts cannot be nil")
+		default:
+			req.SignerOpts = &keymanagerv1.SignDataRequest_HashAlgorithm{
+				HashAlgorithm: s.v1.convertHashAlgorithm(opts.HashFunc()),
+			}
 		}
-	}
 
+	}
 	resp, err := s.v1.KeyManagerPluginClient.SignData(ctx, req)
 	if err != nil {
 		return nil, s.v1.WrapErr(err)

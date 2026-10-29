@@ -16,13 +16,19 @@ type SVIDKeyManager interface {
 	GetKeys(ctx context.Context) ([]Key, error)
 }
 
-// Returns an SVIDKeyManager over the given KeyManager
-func ForSVID(km KeyManager) SVIDKeyManager {
-	return svidKeyManager{km: km}
+// Returns an SVIDKeyManager over the given KeyManager. If no key type is
+// supplied the historical EC P-256 default is used.
+func ForSVID(km KeyManager, keyType ...KeyType) SVIDKeyManager {
+	kt := ECP256
+	if len(keyType) > 0 && keyType[0] != KeyTypeUnset {
+		kt = keyType[0]
+	}
+	return svidKeyManager{km: km, keyType: kt}
 }
 
 type svidKeyManager struct {
-	km KeyManager
+	km      KeyManager
+	keyType KeyType
 }
 
 func (s svidKeyManager) GenerateKey(ctx context.Context, currentKey Key) (Key, error) {
@@ -30,7 +36,7 @@ func (s svidKeyManager) GenerateKey(ctx context.Context, currentKey Key) (Key, e
 	if currentKey != nil && currentKey.ID() == keyID {
 		keyID = "agent-svid-B"
 	}
-	return s.km.GenerateKey(ctx, keyID, ECP256)
+	return s.km.GenerateKey(ctx, keyID, s.keyType)
 }
 
 func (s svidKeyManager) GetKeys(ctx context.Context) ([]Key, error) {

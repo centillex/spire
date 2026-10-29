@@ -10,6 +10,7 @@ import (
 	"github.com/spiffe/spire/pkg/agent/broker"
 	"github.com/spiffe/spire/pkg/agent/endpoints"
 	"github.com/spiffe/spire/pkg/agent/manager"
+	"github.com/spiffe/spire/pkg/agent/plugin/keymanager"
 	"github.com/spiffe/spire/pkg/agent/trustbundlesources"
 	"github.com/spiffe/spire/pkg/agent/workloadkey"
 	"github.com/spiffe/spire/pkg/common/catalog"
@@ -85,6 +86,9 @@ type Config struct {
 
 	// SVID key type
 	WorkloadKeyType workloadkey.KeyType
+
+	// AgentSVIDKeyType selects the key algorithm for the agent's own SVID.
+	AgentSVIDKeyType keymanager.KeyType
 
 	// SyncInterval controls how often the agent sync synchronizer waits
 	SyncInterval time.Duration

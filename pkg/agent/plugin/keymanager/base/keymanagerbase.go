@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -167,6 +168,11 @@ func (m *Base) signData(req *keymanagerv1.SignDataRequest) (*keymanagerv1.SignDa
 
 	var signerOpts crypto.SignerOpts
 	switch opts := req.SignerOpts.(type) {
+	case *keymanagerv1.SignDataRequest_MldsaOptions:
+		if opts.MldsaOptions == nil || len(opts.MldsaOptions.Context) > 255 {
+			return nil, status.Error(codes.InvalidArgument, "invalid ML-DSA options")
+		}
+		signerOpts = &mldsa.Options{Context: string(opts.MldsaOptions.Context)}
 	case *keymanagerv1.SignDataRequest_HashAlgorithm:
 		if opts.HashAlgorithm == keymanagerv1.HashAlgorithm_UNSPECIFIED_HASH_ALGORITHM {
 			return nil, status.Error(codes.InvalidArgument, "hash algorithm is required")
@@ -192,6 +198,11 @@ func (m *Base) signData(req *keymanagerv1.SignDataRequest) (*keymanagerv1.SignDa
 		return nil, status.Errorf(codes.NotFound, "no such key %q", req.KeyId)
 	}
 
+	_, mlKey := privateKey.(*mldsa.PrivateKey)
+	_, mlOpts := signerOpts.(*mldsa.Options)
+	if mlKey != mlOpts {
+		return nil, status.Error(codes.InvalidArgument, "ML-DSA keys require explicit pure-message ML-DSA options; these options cannot be used with other keys")
+	}
 	signature, err := privateKey.Sign(rand.Reader, req.Data, signerOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "keypair %q signing operation failed: %v", req.KeyId, err)
@@ -215,6 +226,12 @@ func (m *Base) getPrivateKeyAndFingerprint(id string) (crypto.Signer, string, bo
 func (m *Base) generateKeyEntry(keyID string, keyType keymanagerv1.KeyType) (e *KeyEntry, err error) {
 	var privateKey crypto.Signer
 	switch keyType {
+	case keymanagerv1.KeyType_ML_DSA_65:
+		generator, ok := m.config.Generator.(interface{ GenerateMLDSA65Key() (crypto.Signer, error) })
+		if !ok {
+			return nil, status.Error(codes.Unimplemented, "configured generator does not support ML-DSA-65")
+		}
+		privateKey, err = generator.GenerateMLDSA65Key()
 	case keymanagerv1.KeyType_EC_P256:
 		privateKey, err = m.config.Generator.GenerateEC256Key()
 	case keymanagerv1.KeyType_EC_P384:
@@ -239,6 +256,18 @@ func (m *Base) generateKeyEntry(keyID string, keyType keymanagerv1.KeyType) (e *
 }
 
 func makeKeyEntry(keyID string, keyType keymanagerv1.KeyType, privateKey crypto.Signer) (*KeyEntry, error) {
+	if keyType == keymanagerv1.KeyType_ML_DSA_65 {
+		if privateKey == nil {
+			return nil, fmt.Errorf("nil ML-DSA-65 signer")
+		}
+		if native, ok := privateKey.(*mldsa.PrivateKey); ok && native == nil {
+			return nil, fmt.Errorf("nil ML-DSA-65 signer")
+		}
+		pub, ok := privateKey.Public().(*mldsa.PublicKey)
+		if !ok || pub == nil || len(pub.Bytes()) != mldsa.MLDSA65().PublicKeySize() || pub.Parameters() != mldsa.MLDSA65() {
+			return nil, fmt.Errorf("generator returned a non-ML-DSA-65 key")
+		}
+	}
 	pkixData, err := x509.MarshalPKIXPublicKey(privateKey.Public())
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal public key for entry %q: %w", keyID, err)
@@ -257,6 +286,11 @@ func makeKeyEntry(keyID string, keyType keymanagerv1.KeyType, privateKey crypto.
 
 func MakeKeyEntryFromKey(id string, privateKey crypto.PrivateKey) (*KeyEntry, error) {
 	switch privateKey := privateKey.(type) {
+	case *mldsa.PrivateKey:
+		if privateKey == nil {
+			return nil, fmt.Errorf("nil ML-DSA private key")
+		}
+		return makeKeyEntry(id, keymanagerv1.KeyType_ML_DSA_65, privateKey)
 	case *ecdsa.PrivateKey:
 		keyType, err := ecdsaKeyType(privateKey)
 		if err != nil {
@@ -299,6 +333,10 @@ func ecdsaKeyType(privateKey *ecdsa.PrivateKey) (keymanagerv1.KeyType, error) {
 }
 
 type defaultGenerator struct{}
+
+func (defaultGenerator) GenerateMLDSA65Key() (crypto.Signer, error) {
+	return mldsa.GenerateKey(mldsa.MLDSA65())
+}
 
 func (defaultGenerator) GenerateRSA2048Key() (crypto.Signer, error) {
 	return rsa.GenerateKey(rand.Reader, 2048)

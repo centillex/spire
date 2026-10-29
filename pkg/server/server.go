@@ -399,6 +399,7 @@ func (s *Server) newCA(metrics telemetry.Metrics, credBuilder *credtemplate.Buil
 		HealthChecker:   healthChecker,
 		DisableJWTSVIDs: s.config.DisableJWTSVIDs,
 		DisableWITSVIDs: s.config.DisableWITSVIDs,
+		StrictPQ:        s.config.StrictPQ,
 	})
 }
 

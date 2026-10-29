@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 
 func KeyTypeFromString(s string) (KeyType, error) {
 	switch strings.ToLower(s) {
+	case "ml-dsa-65":
+		return MLDSA65, nil
 	case "rsa-2048":
 		return RSA2048, nil
 	case "ec-p256":
@@ -31,11 +34,14 @@ const (
 	ECP256
 	RSA2048
 	ECP384
+	MLDSA65
 )
 
 // GenerateSigner generates a new key for the given key type
 func (keyType KeyType) GenerateSigner() (crypto.Signer, error) {
 	switch keyType {
+	case MLDSA65:
+		return mldsa.GenerateKey(mldsa.MLDSA65())
 	case ECP256:
 		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	case ECP384:
@@ -65,6 +71,8 @@ func (keyType KeyType) SigningAlgorithm() (string, error) {
 // String returns the string representation of the key type
 func (keyType KeyType) String() string {
 	switch keyType {
+	case MLDSA65:
+		return "ml-dsa-65"
 	case KeyTypeUnset:
 		return "UNSET"
 	case ECP256:

@@ -444,6 +444,7 @@ func (a *Agent) attest(ctx context.Context, sto storage.Storage, cat catalog.Cat
 		NodeAttestor:         na,
 		TLSPolicy:            a.c.TLSPolicy,
 		LoadBalancingConfig:  a.c.ServerLoadBalancingConfig,
+		SVIDKeyType:          a.c.AgentSVIDKeyType,
 	}
 	return node_attestor.New(&config).Attest(ctx)
 }
@@ -464,6 +465,7 @@ func (a *Agent) newManager(ctx context.Context, sto storage.Storage, cat catalog
 		Log:                  a.c.Log.WithField(telemetry.SubsystemName, telemetry.Manager),
 		Metrics:              metrics,
 		WorkloadKeyType:      a.c.WorkloadKeyType,
+		AgentSVIDKeyType:     a.c.AgentSVIDKeyType,
 		Storage:              sto,
 		TrustBundleSources:   a.c.TrustBundleSources,
 		RebootstrapMode:      a.c.RebootstrapMode,
