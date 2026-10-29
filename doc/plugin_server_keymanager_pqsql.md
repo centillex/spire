@@ -68,3 +68,6 @@ server just created.
   PQ-capable HSM/KMS (tracked as PAR-21 in the workspace gap register).
 - KEK rotation/re-wrap tooling is not implemented; rotating a KEK currently
   requires re-encrypting the key rows.
+- The store is PostgreSQL-only. It does not implement the SQLite or MySQL
+  dialects; a MySQL-backed HA deployment needs a different shared key custody
+  plugin.
