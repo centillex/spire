@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -75,6 +76,16 @@ func NewClient(config ClientConfig) (Client, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if config.SPIFFEAuth == nil {
+		// Web PKI endpoints must honor the same transport policy as SPIFFE
+		// authenticated ones; otherwise strict profiles silently allow a
+		// weaker federation fetch path.
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		if err := tlspolicy.ApplyPolicy(tlsConfig, config.TLSPolicy); err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = tlsConfig
 	}
 	if config.mutateTransportHook != nil {
 		config.mutateTransportHook(transport)

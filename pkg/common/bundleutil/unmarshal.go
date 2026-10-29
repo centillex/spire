@@ -6,12 +6,14 @@ import (
 	"io"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/spire/pkg/common/pqjwk"
 )
 
 func Decode(trustDomain spiffeid.TrustDomain, r io.Reader) (*spiffebundle.Bundle, error) {
-	doc := new(bundleDoc)
+	doc := new(rawBundleDoc)
 	if err := json.NewDecoder(r).Decode(doc); err != nil {
 		return nil, fmt.Errorf("failed to decode bundle: %w", err)
 	}
@@ -19,19 +21,39 @@ func Decode(trustDomain spiffeid.TrustDomain, r io.Reader) (*spiffebundle.Bundle
 }
 
 func Unmarshal(trustDomain spiffeid.TrustDomain, data []byte) (*spiffebundle.Bundle, error) {
-	doc := new(bundleDoc)
+	doc := new(rawBundleDoc)
 	if err := json.Unmarshal(data, doc); err != nil {
 		return nil, err
 	}
 	return unmarshal(trustDomain, doc)
 }
 
-func unmarshal(trustDomain spiffeid.TrustDomain, doc *bundleDoc) (*spiffebundle.Bundle, error) {
+func unmarshal(trustDomain spiffeid.TrustDomain, doc *rawBundleDoc) (*spiffebundle.Bundle, error) {
 	bundle := spiffebundle.New(trustDomain)
 	bundle.SetRefreshHint(time.Second * time.Duration(doc.RefreshHint))
+	if doc.Sequence != 0 {
+		bundle.SetSequenceNumber(doc.Sequence)
+	}
 
-	for i, key := range doc.Keys {
-		switch key.Use {
+	for i, raw := range doc.Keys {
+		use, keyType := rawEntryUse(raw)
+		if use == x509SVIDUse && keyType == "AKP" {
+			// RFC 9964 AKP authority. The codec validates the ML-DSA-65 key,
+			// CA shape, and public key/certificate binding from copied DER.
+			cert, err := pqjwk.ParseX509Authority(raw)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse x509-svid entry %d: %w", i, err)
+			}
+			bundle.AddX509Authority(cert)
+			continue
+		}
+
+		key := new(jose.JSONWebKey)
+		if err := json.Unmarshal(raw, key); err != nil {
+			return nil, fmt.Errorf("failed to decode key entry %d: %w", i, err)
+		}
+
+		switch use {
 		case x509SVIDUse:
 			if len(key.Certificates) != 1 {
 				return nil, fmt.Errorf("expected a single certificate in x509-svid entry %d; got %d", i, len(key.Certificates))
@@ -54,7 +76,7 @@ func unmarshal(trustDomain spiffeid.TrustDomain, doc *bundleDoc) (*spiffebundle.
 		case "":
 			return nil, fmt.Errorf("missing use for key entry %d", i)
 		default:
-			return nil, fmt.Errorf("unrecognized use %q for key entry %d", key.Use, i)
+			return nil, fmt.Errorf("unrecognized use %q for key entry %d", use, i)
 		}
 	}
 

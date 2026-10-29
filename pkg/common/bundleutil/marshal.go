@@ -3,6 +3,7 @@ package bundleutil
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -116,8 +117,10 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 		}
 	}
 
-	var jwks jose.JSONWebKeySet
-	jwks.Keys = make([]jose.JSONWebKey, 0)
+	// Entries are heterogeneous: classical keys serialize through go-jose, while
+	// recognized ML-DSA X509-SVID authorities use the RFC 9964 AKP codec because
+	// go-jose cannot marshal *mldsa.PublicKey.
+	keys := make([]any, 0)
 
 	maybeUse := func(use string) string {
 		if !c.standardJWKS {
@@ -128,7 +131,14 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 
 	if !c.noX509SVIDKeys {
 		for _, rootCA := range bundle.X509Authorities() {
-			jwks.Keys = append(jwks.Keys, jose.JSONWebKey{
+			if isMLDSA(rootCA) {
+				if c.standardJWKS {
+					return nil, errors.New("standard JWKS output cannot represent an ML-DSA AKP x509-svid entry")
+				}
+				keys = append(keys, pqX509Entry{cert: rootCA})
+				continue
+			}
+			keys = append(keys, jose.JSONWebKey{
 				Key:          rootCA.PublicKey,
 				Certificates: []*x509.Certificate{rootCA},
 				Use:          maybeUse(x509SVIDUse),
@@ -138,7 +148,7 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 
 	if !c.noJWTSVIDKeys {
 		for keyID, jwtSigningKey := range bundle.JWTAuthorities() {
-			jwks.Keys = append(jwks.Keys, jose.JSONWebKey{
+			keys = append(keys, jose.JSONWebKey{
 				Key:   jwtSigningKey,
 				KeyID: keyID,
 				Use:   maybeUse(jwtSVIDUse),
@@ -148,7 +158,7 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 
 	if !c.noWITSVIDKeys {
 		for keyID, witSigningKey := range bundle.WITAuthorities() {
-			jwks.Keys = append(jwks.Keys, jose.JSONWebKey{
+			keys = append(keys, jose.JSONWebKey{
 				Key:   witSigningKey,
 				KeyID: keyID,
 				Use:   maybeUse(witSVIDUse),
@@ -156,13 +166,15 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 		}
 	}
 
-	var out any = jwks
+	type document struct {
+		Keys        []any  `json:"keys"`
+		Sequence    uint64 `json:"spiffe_sequence,omitempty"`
+		RefreshHint int    `json:"spiffe_refresh_hint,omitempty"`
+	}
+	out := document{Keys: keys}
 	if !c.standardJWKS {
-		out = bundleDoc{
-			JSONWebKeySet: jwks,
-			RefreshHint:   int(c.refreshHint / time.Second),
-			Sequence:      c.sequenceNumber,
-		}
+		out.Sequence = c.sequenceNumber
+		out.RefreshHint = int(c.refreshHint / time.Second)
 	}
 
 	return json.MarshalIndent(out, "", "    ")

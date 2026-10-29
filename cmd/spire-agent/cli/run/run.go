@@ -29,6 +29,7 @@ import (
 	"github.com/spiffe/spire/pkg/agent"
 	"github.com/spiffe/spire/pkg/agent/broker"
 	"github.com/spiffe/spire/pkg/agent/client"
+	"github.com/spiffe/spire/pkg/agent/plugin/keymanager"
 	"github.com/spiffe/spire/pkg/agent/trustbundlesources"
 	"github.com/spiffe/spire/pkg/agent/workloadkey"
 	"github.com/spiffe/spire/pkg/common/catalog"
@@ -71,6 +72,7 @@ type agentConfig struct {
 	DataDir                       string    `hcl:"data_dir"`
 	AdminSocketPath               string    `hcl:"admin_socket_path"`
 	InsecureBootstrap             bool      `hcl:"insecure_bootstrap"`
+	StrictPQ                      bool      `hcl:"strict_pq"`
 	RebootstrapMode               string    `hcl:"rebootstrap_mode"`
 	RebootstrapDelay              string    `hcl:"rebootstrap_delay"`
 	JoinToken                     string    `hcl:"join_token"`
@@ -87,6 +89,7 @@ type agentConfig struct {
 	DisableWorkloadAPI            bool      `hcl:"disable_workload_api"`
 	DisableSDSAPI                 bool      `hcl:"disable_sds_api"`
 	WorkloadX509SVIDKeyType       string    `hcl:"workload_x509_svid_key_type"`
+	AgentSVIDKeyType              string    `hcl:"agent_svid_key_type"`
 	TrustBundleFormat             string    `hcl:"trust_bundle_format"`
 	TrustBundlePath               string    `hcl:"trust_bundle_path"`
 	TrustBundleSpiffeWorkloadAPI  string    `hcl:"trust_bundle_spiffe_workload_api"`
@@ -717,6 +720,14 @@ func NewAgentConfig(c *Config, logOptions []log.Option, allowUnknownConfig bool)
 	ac.TrustBundleSources = trustbundlesources.New(ts, ac.Log.WithField("Logger", "TrustBundleSources"))
 
 	ac.WorkloadKeyType = workloadkey.ECP256
+	ac.AgentSVIDKeyType = keymanager.ECP256
+	if c.Agent.AgentSVIDKeyType != "" {
+		ac.AgentSVIDKeyType, err = keymanager.KeyTypeFromString(c.Agent.AgentSVIDKeyType)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing agent_svid_key_type: %w", err)
+		}
+	}
+
 	if c.Agent.WorkloadX509SVIDKeyType != "" {
 		ac.WorkloadKeyType, err = workloadkey.KeyTypeFromString(c.Agent.WorkloadX509SVIDKeyType)
 		if err != nil {
@@ -811,7 +822,20 @@ func NewAgentConfig(c *Config, logOptions []log.Option, allowUnknownConfig bool)
 
 	tlsPolicyLogger := log.NewHCLogAdapter(logger, "tlspolicy")
 
-	ac.TLSPolicy, err = tlspolicy.NewPolicy(c.Agent.Experimental.RequirePQKEM, c.Agent.TLSConfig, tlsPolicyLogger)
+	if c.Agent.StrictPQ {
+		// Fail closed before any connection is attempted.
+		if c.Agent.InsecureBootstrap {
+			return nil, errors.New("strict_pq forbids insecure_bootstrap; provision the trust bundle out of band")
+		}
+		if ac.WorkloadKeyType != workloadkey.MLDSA65 {
+			return nil, errors.New("strict_pq requires workload_x509_svid_key_type = ml-dsa-65")
+		}
+		if ac.AgentSVIDKeyType != keymanager.MLDSA65 {
+			return nil, errors.New("strict_pq requires agent_svid_key_type = ml-dsa-65")
+		}
+	}
+
+	ac.TLSPolicy, err = tlspolicy.NewPolicy(c.Agent.Experimental.RequirePQKEM || c.Agent.StrictPQ, c.Agent.TLSConfig, tlsPolicyLogger)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse configured TLS configuration: %w", err)
 	}

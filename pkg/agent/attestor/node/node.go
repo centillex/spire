@@ -52,6 +52,9 @@ type Config struct {
 	ServerAddress        string
 	NodeAttestor         nodeattestor.NodeAttestor
 	TLSPolicy            tlspolicy.Policy
+	// SVIDKeyType selects the agent SVID key algorithm. Zero means the
+	// historical EC P-256 default.
+	SVIDKeyType keymanager.KeyType
 }
 
 type attestor struct {
@@ -103,7 +106,11 @@ func (a *attestor) Attest(ctx context.Context) (res *AttestationResult, err erro
 
 // Load the current SVID and key. The returned SVID is nil to indicate a new SVID should be created.
 func (a *attestor) loadSVID(ctx context.Context) ([]*x509.Certificate, keymanager.Key, bool, error) {
-	svidKM := keymanager.ForSVID(a.c.Catalog.GetKeyManager())
+	keyType := a.c.SVIDKeyType
+	if keyType == keymanager.KeyTypeUnset {
+		keyType = keymanager.ECP256
+	}
+	svidKM := keymanager.ForSVID(a.c.Catalog.GetKeyManager(), keyType)
 	allKeys, err := svidKM.GetKeys(ctx)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("unable to load private key: %w", err)

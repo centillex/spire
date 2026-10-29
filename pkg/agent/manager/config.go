@@ -39,6 +39,7 @@ type Config struct {
 	RebootstrapMode          string
 	RebootstrapDelay         time.Duration
 	WorkloadKeyType          workloadkey.KeyType
+	AgentSVIDKeyType         keymanager.KeyType
 	SyncInterval             time.Duration
 	UseSyncAuthorizedEntries bool
 	RotationInterval         time.Duration
@@ -81,7 +82,7 @@ func newManager(c *Config) *manager {
 	bundleCache := managerCache.NewBundleCache(c.TrustDomain, c.Bundle)
 
 	rotCfg := &svid.RotatorConfig{
-		SVIDKeyManager:   keymanager.ForSVID(c.Catalog.GetKeyManager()),
+		SVIDKeyManager:   keymanager.ForSVID(c.Catalog.GetKeyManager(), c.AgentSVIDKeyType),
 		Log:              c.Log,
 		Metrics:          c.Metrics,
 		SVID:             c.SVID,

@@ -20,12 +20,14 @@ func MakeCSR(privateKey any, spiffeID spiffeid.ID) ([]byte, error) {
 }
 
 func MakeCSRWithoutURISAN(privateKey any) ([]byte, error) {
+	// Do not pin a signature algorithm: crypto/x509 selects the scheme that
+	// matches the key type, including ML-DSA. Pinning ECDSAWithSHA256 would
+	// reject non-ECDSA agent/workload keys.
 	return makeCSR(privateKey, &x509.CertificateRequest{
 		Subject: pkix.Name{
 			Country:      []string{"US"},
 			Organization: []string{"SPIRE"},
 		},
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
 	})
 }
 

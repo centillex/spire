@@ -5,9 +5,11 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
+	"strings"
 
 	"github.com/spiffe/spire/pkg/common/catalog"
 )
@@ -45,11 +47,32 @@ const (
 	ECP384
 	RSA2048
 	RSA4096
+	MLDSA65
 )
+
+// KeyTypeFromString parses a configured key type name.
+func KeyTypeFromString(s string) (KeyType, error) {
+	switch strings.ToLower(s) {
+	case "ec-p256":
+		return ECP256, nil
+	case "ec-p384":
+		return ECP384, nil
+	case "rsa-2048":
+		return RSA2048, nil
+	case "rsa-4096":
+		return RSA4096, nil
+	case "ml-dsa-65":
+		return MLDSA65, nil
+	default:
+		return KeyTypeUnset, fmt.Errorf("key type %q is unknown; must be one of [ec-p256, ec-p384, rsa-2048, rsa-4096, ml-dsa-65]", s)
+	}
+}
 
 // GenerateSigner generates a new key for the given key type
 func (keyType KeyType) GenerateSigner() (crypto.Signer, error) {
 	switch keyType {
+	case MLDSA65:
+		return mldsa.GenerateKey(mldsa.MLDSA65())
 	case ECP256:
 		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	case ECP384:
@@ -65,6 +88,8 @@ func (keyType KeyType) GenerateSigner() (crypto.Signer, error) {
 // String returns the string representation of the key type
 func (keyType KeyType) String() string {
 	switch keyType {
+	case MLDSA65:
+		return "ml-dsa-65"
 	case KeyTypeUnset:
 		return "UNSET"
 	case ECP256:

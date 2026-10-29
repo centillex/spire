@@ -1,6 +1,6 @@
 module github.com/spiffe/spire
 
-go 1.26.10
+go 1.27.3
 
 require (
 	cloud.google.com/go/iam v1.12.0
@@ -330,3 +330,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.3 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/spiffe/spire-plugin-sdk => ../spire-plugin-sdk

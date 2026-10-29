@@ -80,6 +80,7 @@ type serverConfig struct {
 	Experimental                 experimentalConfig   `hcl:"experimental"`
 	Federation                   *federationConfig    `hcl:"federation"`
 	DisableJWTSVIDs              bool                 `hcl:"disable_jwt_svids"`
+	StrictPQ                     bool                 `hcl:"strict_pq"`
 	JWTIssuer                    string               `hcl:"jwt_issuer"`
 	JWTKeyType                   string               `hcl:"jwt_key_type"`
 	LogFile                      string               `hcl:"log_file"`
@@ -522,7 +523,7 @@ func NewServerConfig(c *Config, logOptions []log.Option, allowUnknownConfig bool
 
 	tlsPolicyLogger := log.NewHCLogAdapter(logger, "tlspolicy")
 
-	sc.TLSPolicy, err = tlspolicy.NewPolicy(c.Server.Experimental.RequirePQKEM, c.Server.TLSConfig, tlsPolicyLogger)
+	sc.TLSPolicy, err = tlspolicy.NewPolicy(c.Server.Experimental.RequirePQKEM || c.Server.StrictPQ, c.Server.TLSConfig, tlsPolicyLogger)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse configured TLS configuration: %w", err)
 	}
@@ -722,10 +723,25 @@ func NewServerConfig(c *Config, logOptions []log.Option, allowUnknownConfig bool
 		sc.Log.Info("JWT-SVID profile is disabled")
 	}
 	sc.DisableJWTSVIDs = c.Server.DisableJWTSVIDs
+	sc.StrictPQ = c.Server.StrictPQ
 
 	sc.DisableWITSVIDs = true
 	if fflag.IsSet(fflag.FlagWITSVID) {
 		sc.DisableWITSVIDs = false
+	}
+
+	// This build adds ML-DSA-65 for X.509 CA and SVID signing only. It does
+	// not implement ML-DSA token serialization. Fail closed instead of starting
+	// a server whose token keys cannot sign or whose tokens would need a
+	// classical fallback.
+	if sc.JWTKeyType == keymanager.MLDSA65 && !sc.DisableJWTSVIDs {
+		return nil, errors.New("ml-dsa-65 JWT signing keys are not supported by this build; disable the JWT-SVID profile")
+	}
+	if sc.WITKeyType == keymanager.MLDSA65 && !sc.DisableWITSVIDs {
+		return nil, errors.New("ml-dsa-65 WIT signing keys are not supported by this build; disable the WIT-SVID profile")
+	}
+	if (sc.CAKeyType == keymanager.MLDSA65 || sc.StrictPQ) && (!sc.DisableJWTSVIDs || !sc.DisableWITSVIDs) {
+		return nil, errors.New("ca_key_type ml-dsa-65 and strict_pq require disable_jwt_svids = true and the WIT-SVID profile disabled")
 	}
 
 	if !allowUnknownConfig {
