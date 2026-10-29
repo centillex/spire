@@ -280,3 +280,81 @@ func mustGenerate(t *testing.T) *mldsa.PrivateKey {
 }
 
 var _ store = (*memoryStore)(nil)
+
+// TestConcurrentWritersPreserveAllSlots models two servers generating different
+// key slots at the same time. Upsert-only writes must not drop either slot.
+func TestConcurrentWritersPreserveAllSlots(t *testing.T) {
+	st := newMemoryStore()
+	kekPath := writeKEK(t)
+	serverA := configurePlugin(t, st, kekPath)
+	serverB := configurePlugin(t, st, kekPath)
+
+	var wg sync.WaitGroup
+	for _, tc := range []struct {
+		plugin *Plugin
+		id     string
+	}{
+		{serverA, "X509-CA-A"},
+		{serverB, "X509-CA-B"},
+		{serverA, "JWT-Signer-A"},
+		{serverB, "JWT-Signer-B"},
+	} {
+		wg.Add(1)
+		go func(plugin *Plugin, id string) {
+			defer wg.Done()
+			_, err := plugin.GenerateKey(context.Background(), &keymanagerv1.GenerateKeyRequest{
+				KeyId:   id,
+				KeyType: keymanagerv1.KeyType_ML_DSA_65,
+			})
+			require.NoError(t, err)
+		}(tc.plugin, tc.id)
+	}
+	wg.Wait()
+
+	st.mu.Lock()
+	ids := make([]string, 0, len(st.records))
+	for id := range st.records {
+		ids = append(ids, id)
+	}
+	revision := st.revision
+	st.mu.Unlock()
+	require.ElementsMatch(t, []string{"X509-CA-A", "X509-CA-B", "JWT-Signer-A", "JWT-Signer-B"}, ids)
+	require.GreaterOrEqual(t, revision, int64(4))
+
+	// The other server sees every slot after refreshing.
+	serverA.mu.Lock()
+	serverA.lastCheck = time.Time{}
+	serverA.mu.Unlock()
+	keys, err := serverA.GetPublicKeys(context.Background(), &keymanagerv1.GetPublicKeysRequest{})
+	require.NoError(t, err)
+	require.Len(t, keys.PublicKeys, 4)
+}
+
+// TestConcurrentSameSlotWritesKeepOneRow models a rotation race: last writer
+// wins, and the store still has exactly one row for the slot.
+func TestConcurrentSameSlotWritesKeepOneRow(t *testing.T) {
+	st := newMemoryStore()
+	kekPath := writeKEK(t)
+	servers := []*Plugin{configurePlugin(t, st, kekPath), configurePlugin(t, st, kekPath)}
+
+	var wg sync.WaitGroup
+	for _, plugin := range servers {
+		wg.Add(1)
+		go func(plugin *Plugin) {
+			defer wg.Done()
+			for i := 0; i < 5; i++ {
+				_, err := plugin.GenerateKey(context.Background(), &keymanagerv1.GenerateKeyRequest{
+					KeyId:   "X509-CA-A",
+					KeyType: keymanagerv1.KeyType_ML_DSA_65,
+				})
+				require.NoError(t, err)
+			}
+		}(plugin)
+	}
+	wg.Wait()
+
+	st.mu.Lock()
+	count := len(st.records)
+	st.mu.Unlock()
+	require.Equal(t, 1, count)
+}
