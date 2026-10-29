@@ -45,7 +45,7 @@ require (
 	github.com/envoyproxy/go-control-plane v0.14.0
 	github.com/envoyproxy/go-control-plane/envoy v1.40.0
 	github.com/fullsailor/pkcs7 v0.0.0-20190404230743-d7302db945fa
-	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/gofrs/uuid/v5 v5.5.1
@@ -175,8 +175,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
-	github.com/go-chi/chi/v5 v5.3.1 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
+	github.com/go-chi/chi/v5 v5.4.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect

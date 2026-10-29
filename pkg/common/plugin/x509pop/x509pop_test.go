@@ -1,6 +1,7 @@
 package x509pop
 
 import (
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -48,6 +49,39 @@ func TestChallengeResponse(t *testing.T) {
 	require.NoError(err)
 	err = VerifyChallengeResponse(ecdsaPublicKey, ecdsaChallenge, ecdsaResponse)
 	require.NoError(err)
+
+	// verify the ML-DSA-65 challenge/response flow
+	mldsaPrivateKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(err)
+	mldsaPublicKey := mldsaPrivateKey.PublicKey()
+	mldsaCert, err := createCertificate(mldsaPrivateKey, mldsaPublicKey)
+	require.NoError(err)
+	mldsaChallenge, err := GenerateChallenge(mldsaCert)
+	require.NoError(err)
+	require.NotNil(mldsaChallenge.MLDSASignature)
+	mldsaResponse, err := CalculateResponse(mldsaPrivateKey, mldsaChallenge)
+	require.NoError(err)
+	require.NoError(VerifyChallengeResponse(mldsaPublicKey, mldsaChallenge, mldsaResponse))
+
+	// A tampered ML-DSA signature must fail.
+	mldsaResponse.MLDSASignature.Signature[0]++
+	require.EqualError(VerifyChallengeResponse(mldsaPublicKey, mldsaChallenge, mldsaResponse), "ML-DSA signature verify failed")
+
+	// Other ML-DSA parameter sets are not admitted by this profile.
+	mldsa44Key, err := mldsa.GenerateKey(mldsa.MLDSA44())
+	require.NoError(err)
+	mldsa44Cert, err := createCertificate(mldsa44Key, mldsa44Key.PublicKey())
+	require.NoError(err)
+	_, err = GenerateChallenge(mldsa44Cert)
+	require.EqualError(err, "challenge-response requires an ML-DSA-65 key")
+
+	// ML-DSA keys cannot answer RSA/ECDSA challenges and vice versa.
+	_, err = CalculateResponse(mldsaPrivateKey, ecdsaChallenge)
+	require.EqualError(err, "expecting ML-DSA challenge")
+	_, err = CalculateResponse(ecdsaPrivateKey, mldsaChallenge)
+	require.EqualError(err, "expecting ECDSA challenge")
+	require.EqualError(VerifyChallengeResponse(mldsaPublicKey, ecdsaChallenge, mldsaResponse), "expecting ML-DSA challenge")
+	require.EqualError(VerifyChallengeResponse(mldsaPublicKey, mldsaChallenge, ecdsaResponse), "expecting ML-DSA response")
 
 	// assert various misconfigurations fail
 	_, err = CalculateResponse(rsaPrivateKey, ecdsaChallenge)
