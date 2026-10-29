@@ -177,12 +177,13 @@ func (p *Plugin) GetPublicKeys(ctx context.Context, req *keymanagerv1.GetPublicK
 	return p.Base.GetPublicKeys(ctx, req)
 }
 
-// SignData refreshes from the shared store before signing so a key rotated on
-// another server is used within the refresh interval.
+// SignData signs with the key as loaded. It deliberately does NOT refresh
+// underneath an active key: the facade checks the fingerprint returned by the
+// plugin against the fingerprint it saw when the key was fetched, so swapping
+// the key mid-call would look like key mismanagement. Rotation becomes visible
+// through GetPublicKey/GetPublicKeys, which the CA manager consults when the
+// shared journal assigns a new slot.
 func (p *Plugin) SignData(ctx context.Context, req *keymanagerv1.SignDataRequest) (*keymanagerv1.SignDataResponse, error) {
-	if err := p.refresh(ctx); err != nil {
-		return nil, err
-	}
 	return p.Base.SignData(ctx, req)
 }
 

@@ -135,10 +135,16 @@ func TestSharedKeysAcrossServers(t *testing.T) {
 	serverB := configurePlugin(t, st, kekPath)
 
 	// A generates the key; B has not refreshed yet.
-	generateKey(t, serverA, "X509-CA-A")
+	generated := generateKey(t, serverA, "X509-CA-A")
 	serverB.mu.Lock()
 	serverB.lastCheck = time.Time{}
 	serverB.mu.Unlock()
+
+	// A server loads the slot when it observes the shared journal. Simulate
+	// that by fetching the public key before signing.
+	loaded, err := serverB.GetPublicKey(context.Background(), &keymanagerv1.GetPublicKeyRequest{KeyId: "X509-CA-A"})
+	require.NoError(t, err)
+	require.Equal(t, generated.PkixData, loaded.PublicKey.PkixData)
 
 	message := []byte("shared-key signing")
 	sig, pub := sign(t, serverB, "X509-CA-A", message)
@@ -162,15 +168,25 @@ func TestRefreshPicksUpRotation(t *testing.T) {
 	serverB.mu.Lock()
 	serverB.lastCheck = time.Time{}
 	serverB.mu.Unlock()
+	loaded, err := serverB.GetPublicKey(context.Background(), &keymanagerv1.GetPublicKeyRequest{KeyId: "X509-CA-A"})
+	require.NoError(t, err)
+	require.Equal(t, first.PkixData, loaded.PublicKey.PkixData)
 	_, onB := sign(t, serverB, "X509-CA-A", []byte("before"))
 	require.Equal(t, first.PkixData, onB.PkixData)
 
-	// Rotation happens on A. B must use the new key after its refresh interval.
+	// Rotation happens on A. B sees the new key when it next fetches the public
+	// key (as the CA manager does when the shared journal changes), while
+	// signing with its already-loaded key stays consistent with the fingerprint
+	// it was given.
 	rotated := generateKey(t, serverA, "X509-CA-A")
 	require.NotEqual(t, first.PkixData, rotated.PkixData)
 	time.Sleep(2 * time.Millisecond)
-	_, onB = sign(t, serverB, "X509-CA-A", []byte("after"))
-	require.Equal(t, rotated.PkixData, onB.PkixData)
+	serverB.mu.Lock()
+	serverB.lastCheck = time.Time{}
+	serverB.mu.Unlock()
+	pub, err2 := serverB.GetPublicKey(context.Background(), &keymanagerv1.GetPublicKeyRequest{KeyId: "X509-CA-A"})
+	require.NoError(t, err2)
+	require.Equal(t, rotated.PkixData, pub.PublicKey.PkixData)
 }
 
 func TestWrongKEKCannotReadKeys(t *testing.T) {
