@@ -91,8 +91,16 @@ func NewClient(config ClientConfig) (Client, error) {
 		config.mutateTransportHook(transport)
 	}
 	return &client{
-		c:      config,
-		client: &http.Client{Transport: transport},
+		c: config,
+		client: &http.Client{
+			Transport: transport,
+			// A bundle endpoint must be the authenticated endpoint itself.
+			// Following redirects could downgrade to a weaker or unrelated
+			// endpoint, so redirects are rejected outright.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
 }
 
@@ -109,6 +117,9 @@ func (c *client) FetchBundle(context.Context) (*spiffebundle.Bundle, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return nil, fmt.Errorf("bundle endpoint redirect (status %d) to %q is not allowed", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d fetching bundle: %s", resp.StatusCode, tryRead(resp.Body))
 	}
