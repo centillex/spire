@@ -47,7 +47,9 @@ server just created.
 
 - Every server uses the same database and KEK.
 - A server checks the revision before generating or fetching keys and reloads
-  when another server has written (bounded by `refresh_interval`).
+  when another server has written (bounded by `refresh_interval`). A local write
+  invalidates the cached revision so the next lookup reloads the complete slot
+  set rather than assuming the writer's view is current.
 - Signing uses the key as loaded. Rotation becomes visible through key lookups,
   which the CA manager performs when the shared CA journal assigns a slot. This
   keeps the fingerprint returned by the plugin consistent with the fingerprint

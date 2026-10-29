@@ -228,8 +228,13 @@ func (p *Plugin) writeEntries(ctx context.Context, entries []*keymanagerbase.Key
 		return status.Errorf(codes.Internal, "unable to persist keys: %v", err)
 	}
 
+	// The write only carried this server's entries, while the store's revision
+	// also covers rows written by other servers. Invalidate the cached revision
+	// so the next lookup reloads the complete slot set instead of assuming the
+	// local view is current.
+	_ = revision
 	p.mu.Lock()
-	p.revision = revision
+	p.revision = -1
 	p.lastCheck = time.Now()
 	p.mu.Unlock()
 	_ = refresh
