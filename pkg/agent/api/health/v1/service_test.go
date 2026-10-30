@@ -2,7 +2,6 @@ package health_test
 
 import (
 	"context"
-	"crypto/x509"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -72,7 +71,7 @@ func TestServiceCheck(t *testing.T) {
 					Message: "Health check failed",
 					Data: logrus.Fields{
 						"error":  "rpc error: code = Unavailable desc = ",
-						"reason": "unable to fetch X.509 context from Workload API",
+						"reason": "unable to fetch X.509 bundles from Workload API",
 					},
 				},
 			},
@@ -136,22 +135,13 @@ type fakeWorkloadAPI struct {
 	code     codes.Code
 }
 
-func (w fakeWorkloadAPI) FetchX509SVID(_ *workload.X509SVIDRequest, stream workload.SpiffeWorkloadAPI_FetchX509SVIDServer) error {
+func (w fakeWorkloadAPI) FetchX509Bundles(_ *workload.X509BundlesRequest, stream workload.SpiffeWorkloadAPI_FetchX509BundlesServer) error {
 	if w.code != codes.OK {
 		return status.Error(w.code, "")
 	}
-	privateKey, err := x509.MarshalPKCS8PrivateKey(w.x509SVID.PrivateKey)
-	if err != nil {
-		return err
-	}
-	return stream.Send(&workload.X509SVIDResponse{
-		Svids: []*workload.X509SVID{
-			{
-				SpiffeId:    w.x509SVID.ID.String(),
-				X509Svid:    x509util.DERFromCertificates(w.x509SVID.Certificates),
-				X509SvidKey: privateKey,
-				Bundle:      x509util.DERFromCertificates(w.bundle.X509Authorities()),
-			},
+	return stream.Send(&workload.X509BundlesResponse{
+		Bundles: map[string][]byte{
+			w.bundle.TrustDomain().IDString(): x509util.DERFromCertificates(w.bundle.X509Authorities()),
 		},
 	})
 }
