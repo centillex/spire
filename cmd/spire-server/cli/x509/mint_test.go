@@ -34,7 +34,10 @@ import (
 var (
 	expectedUsage = `Usage of x509 mint:
   -dns value
-    	DNS name that will be included in SVID. Can be used more than once.` + clitest.AddrOutputUsage +
+    	DNS name that will be included in SVID. Can be used more than once.` +
+		strings.Replace(clitest.AddrOutputUsage, "  -output", `  -keyType string
+    	Key type for the SVID private key: ec-p256 (default) or ml-dsa-65
+  -output`, 1) +
 		`  -spiffeID string
     	SPIFFE ID of the X509-SVID
   -ttl duration

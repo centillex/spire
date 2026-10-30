@@ -6,6 +6,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -48,6 +49,7 @@ type mintCommand struct {
 	generateKey generateKeyFunc
 
 	spiffeID string
+	keyType  string
 	ttl      time.Duration
 	dnsNames commoncli.StringsFlag
 	write    string
@@ -65,10 +67,22 @@ func (c *mintCommand) Synopsis() string {
 
 func (c *mintCommand) AppendFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.spiffeID, "spiffeID", "", "SPIFFE ID of the X509-SVID")
+	fs.StringVar(&c.keyType, "keyType", "", "Key type for the SVID private key: ec-p256 (default) or ml-dsa-65")
 	fs.DurationVar(&c.ttl, "ttl", 0, "TTL of the X509-SVID")
 	fs.Var(&c.dnsNames, "dns", "DNS name that will be included in SVID. Can be used more than once.")
 	fs.StringVar(&c.write, "write", "", "Directory to write output to instead of stdout")
 	cliprinter.AppendFlagWithCustomPretty(&c.printer, fs, c.env, c.prettyPrintMint)
+}
+
+func (c *mintCommand) newKey() (crypto.Signer, error) {
+	switch c.keyType {
+	case "", "ec-p256":
+		return c.generateKey()
+	case "ml-dsa-65":
+		return mldsa.GenerateKey(mldsa.MLDSA65())
+	default:
+		return nil, fmt.Errorf("unsupported key type %q", c.keyType)
+	}
 }
 
 func (c *mintCommand) Run(ctx context.Context, env *commoncli.Env, serverClient serverutil.ServerClient) error {
@@ -86,7 +100,7 @@ func (c *mintCommand) Run(ctx context.Context, env *commoncli.Env, serverClient 
 		return fmt.Errorf("invalid value for TTL: %w", err)
 	}
 
-	key, err := c.generateKey()
+	key, err := c.newKey()
 	if err != nil {
 		return fmt.Errorf("unable to generate key: %w", err)
 	}

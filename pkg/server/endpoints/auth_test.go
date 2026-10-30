@@ -12,6 +12,7 @@ import (
 	"github.com/spiffe/spire/pkg/server/svid"
 	"github.com/spiffe/spire/test/testca"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -140,4 +141,16 @@ func TestBundleSource(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMatchMemberOrOneOf(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("example.org")
+	foreign := spiffeid.RequireFromString("spiffe://foreign.org/admin")
+	local := spiffeid.RequireFromString("spiffe://example.org/workload/app")
+
+	// Local trust-domain members are always authorized; admin_ids extends that
+	// to the named foreign IDs only.
+	require.NoError(t, matchMemberOrOneOf(td)(local))
+	require.Error(t, matchMemberOrOneOf(td)(foreign))
+	require.NoError(t, matchMemberOrOneOf(td, foreign)(foreign))
 }
