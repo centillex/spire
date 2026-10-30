@@ -11,12 +11,10 @@ import (
 	"github.com/spiffe/go-spiffe/v2/logger"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
-	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	bundlev1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/bundle/v1"
 	svidv1 "github.com/spiffe/spire-api-sdk/proto/spire/api/server/svid/v1"
 	"github.com/spiffe/spire-api-sdk/proto/spire/api/types"
 	"github.com/spiffe/spire/pkg/common/tlspolicy"
-	"github.com/spiffe/spire/pkg/common/util"
 	"github.com/spiffe/spire/pkg/common/x509util"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -44,7 +42,7 @@ type serverClient struct {
 	tlsPolicy       tlspolicy.Policy
 
 	mtx    sync.RWMutex
-	source *workloadapi.X509Source
+	source *workloadSource
 
 	bundleClient bundlev1.BundleClient
 	svidClient   svidv1.SVIDClient
@@ -52,12 +50,7 @@ type serverClient struct {
 
 // start initializes spire-server endpoints client, it uses X509 source to keep an active connection
 func (c *serverClient) start(ctx context.Context) error {
-	clientOption, err := util.GetWorkloadAPIClientOption(c.workloadAPIAddr)
-	if err != nil {
-		return status.Errorf(codes.Internal, "could not get Workload API client options: %v", err)
-	}
-	source, err := workloadapi.NewX509Source(ctx, workloadapi.WithClientOptions(clientOption,
-		workloadapi.WithLogger(c.log)))
+	source, err := newWorkloadSource(ctx, c.workloadAPIAddr)
 	if err != nil {
 		return status.Errorf(codes.Internal, "unable to create X509Source: %v", err)
 	}
