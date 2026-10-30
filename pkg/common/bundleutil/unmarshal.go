@@ -48,13 +48,17 @@ func unmarshal(trustDomain spiffeid.TrustDomain, doc *rawBundleDoc) (*spiffebund
 			bundle.AddX509Authority(cert)
 			continue
 		}
-		if use == jwtSVIDUse && keyType == "AKP" {
+		if (use == jwtSVIDUse || use == witSVIDUse) && keyType == "AKP" {
 			keyID, publicKey, err := pqjose.ParsePublicJWK(raw)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse jwt-svid entry %d: %w", i, err)
+				return nil, fmt.Errorf("failed to parse %s entry %d: %w", use, i, err)
 			}
-			if err := bundle.AddJWTAuthority(keyID, publicKey); err != nil {
-				return nil, fmt.Errorf("failed to add jwt-svid entry %d: %w", i, err)
+			if use == jwtSVIDUse {
+				if err := bundle.AddJWTAuthority(keyID, publicKey); err != nil {
+					return nil, fmt.Errorf("failed to add jwt-svid entry %d: %w", i, err)
+				}
+			} else if err := bundle.AddWITAuthority(keyID, publicKey); err != nil {
+				return nil, fmt.Errorf("failed to add wit-svid entry %d: %w", i, err)
 			}
 			continue
 		}

@@ -573,3 +573,27 @@ func TestMLDSAJWTBundleRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, publicKey.Equal(key.PublicKey()))
 }
+
+func TestMLDSAWITBundleRoundTrip(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("pq.example")
+	key, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+
+	bundle := spiffebundle.New(td)
+	require.NoError(t, bundle.AddWITAuthority("wit-key", key.PublicKey()))
+
+	encoded, err := MarshalWITSVIDBundle(bundle)
+	require.NoError(t, err)
+	require.Contains(t, encoded, `"kty": "AKP"`)
+	require.Contains(t, encoded, `"alg": "ML-DSA-65"`)
+	require.Contains(t, encoded, `"use": "wit-svid"`)
+	require.NotContains(t, encoded, `"priv"`)
+
+	parsed, err := Unmarshal(td, []byte(encoded))
+	require.NoError(t, err)
+	authority, ok := parsed.FindWITAuthority("wit-key")
+	require.True(t, ok)
+	publicKey, ok := authority.(*mldsa.PublicKey)
+	require.True(t, ok)
+	require.True(t, publicKey.Equal(key.PublicKey()))
+}

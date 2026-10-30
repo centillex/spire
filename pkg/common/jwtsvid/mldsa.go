@@ -74,3 +74,26 @@ func ParseMLDSA(token string) (*pqjose.Token, *MLDSAClaims, map[string]any, erro
 	}
 	return tok, &claims, generic, nil
 }
+
+// MLDSAWITClaims is the standard claim subset for an ML-DSA-65 WIT-SVID.
+type MLDSAWITClaims struct {
+	Subject   string         `json:"sub"`
+	Audience  Audience       `json:"aud"`
+	Expiry    *NumericDate   `json:"exp"`
+	NotBefore *NumericDate   `json:"nbf"`
+	IssuedAt  *NumericDate   `json:"iat"`
+	CNF       map[string]any `json:"cnf"`
+}
+
+// ParseMLDSAWIT parses an ML-DSA-65 WIT-SVID without verifying its signature.
+func ParseMLDSAWIT(token string) (*pqjose.Token, *MLDSAWITClaims, error) {
+	tok, err := pqjose.ParseJWTWithTypes(token, "wit+jwt")
+	if err != nil {
+		return nil, nil, err
+	}
+	var claims MLDSAWITClaims
+	if err := json.Unmarshal(tok.Claims(), &claims); err != nil {
+		return nil, nil, fmt.Errorf("unable to parse WIT claims: %w", err)
+	}
+	return tok, &claims, nil
+}

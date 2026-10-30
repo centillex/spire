@@ -768,17 +768,14 @@ func newServerConfig(c *Config, logOptions []log.Option, allowUnknownConfig, ski
 
 	sc.DisableWITSVIDs = !c.Server.Experimental.EnableWITSVIDs
 
-	if sc.WITKeyType == keymanager.MLDSA65 && !sc.DisableWITSVIDs {
-		return nil, errors.New("ml-dsa-65 WIT signing keys are not supported by this build; disable the WIT-SVID profile")
-	}
 	if sc.StrictPQ && sc.CAKeyType != keymanager.MLDSA65 {
 		return nil, errors.New("strict_pq requires ca_key_type = ml-dsa-65")
 	}
 	if (sc.CAKeyType == keymanager.MLDSA65 || sc.StrictPQ) && !sc.DisableJWTSVIDs && sc.JWTKeyType != keymanager.MLDSA65 {
 		return nil, errors.New("strict PQ requires jwt_key_type = ml-dsa-65 or disable_jwt_svids = true")
 	}
-	if (sc.CAKeyType == keymanager.MLDSA65 || sc.StrictPQ) && !sc.DisableWITSVIDs {
-		return nil, errors.New("ca_key_type ml-dsa-65 and strict_pq require the WIT-SVID profile to be disabled")
+	if (sc.CAKeyType == keymanager.MLDSA65 || sc.StrictPQ) && !sc.DisableWITSVIDs && sc.WITKeyType != keymanager.MLDSA65 {
+		return nil, errors.New("strict PQ requires wit_key_type = ml-dsa-65 or disable the WIT-SVID profile")
 	}
 
 	if !allowUnknownConfig {

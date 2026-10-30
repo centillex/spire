@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"crypto"
+	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"github.com/spiffe/spire/pkg/agent/manager/cache"
 	"github.com/spiffe/spire/pkg/common/bundleutil"
 	"github.com/spiffe/spire/pkg/common/jwtsvid"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/telemetry"
 	"github.com/spiffe/spire/pkg/common/x509util"
 	"github.com/spiffe/spire/proto/spire/common"
@@ -612,7 +614,13 @@ func composeWITSVIDResponse(update *cache.WITWorkloadUpdate) (*workload.WITSVIDR
 	for _, identity := range update.Identities {
 		id := identity.Entry.SpiffeId
 
-		keyJWK, err := (&jose.JSONWebKey{Key: identity.PrivateKey}).MarshalJSON()
+		var keyJWK []byte
+		var err error
+		if privateKey, ok := identity.PrivateKey.(*mldsa.PrivateKey); ok {
+			keyJWK, err = pqjose.MarshalPrivateJWK("", privateKey)
+		} else {
+			keyJWK, err = (&jose.JSONWebKey{Key: identity.PrivateKey}).MarshalJSON()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("marshal key for %v: %w", id, err)
 		}

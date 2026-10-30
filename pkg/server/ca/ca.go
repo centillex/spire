@@ -553,7 +553,22 @@ func (ca *CA) IsWITSVIDsDisabled() bool {
 }
 
 func (ca *CA) signWITSVID(witKey *WITKey, claims map[string]any) (string, error) {
-	alg, err := cryptoutil.JoseAlgFromPublicKey(witKey.Signer.Public())
+	publicKey := witKey.Signer.Public()
+	if mlDSAKey, ok := publicKey.(*mldsa.PublicKey); ok {
+		if mlDSAKey.Parameters() != mldsa.MLDSA65() {
+			return "", fmt.Errorf("WIT signing key uses unsupported parameters %q", mlDSAKey.Parameters())
+		}
+		payload, err := json.Marshal(claims)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal WIT SVID claims: %w", err)
+		}
+		return pqjose.SignJWTWithType("wit+jwt", witKey.Kid, payload, witKey.Signer)
+	}
+	if ca.c.StrictPQ {
+		return "", fmt.Errorf("strict PQ policy: ML-DSA-65 WIT signing key required, got %T", publicKey)
+	}
+
+	alg, err := cryptoutil.JoseAlgFromPublicKey(publicKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to determine WIT key algorithm: %w", err)
 	}

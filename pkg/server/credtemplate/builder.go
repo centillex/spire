@@ -3,9 +3,11 @@ package credtemplate
 import (
 	"context"
 	"crypto"
+	"crypto/mldsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -18,6 +20,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire/pkg/common/idutil"
+	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/tlspolicy"
 	"github.com/spiffe/spire/pkg/common/x509util"
 	"github.com/spiffe/spire/pkg/server/api"
@@ -407,12 +410,16 @@ func (b *Builder) BuildWorkloadWITSVIDClaims(ctx context.Context, params Workloa
 	now := b.config.Clock.Now()
 	_, expiresAt := computeCappedLifetime(b.config.Clock, ttl, params.ExpirationCap)
 
+	cnfJWK, err := cnfJWK(params.PublicKey)
+	if err != nil {
+		return nil, err
+	}
 	claims := map[string]any{
 		"sub": params.SPIFFEID.String(),
 		"exp": jwt.NewNumericDate(expiresAt),
 		"iat": jwt.NewNumericDate(now),
 		"cnf": map[string]any{
-			"jwk": params.PublicKey,
+			"jwk": cnfJWK,
 		},
 	}
 	if b.config.WITIssuer != "" {
@@ -420,6 +427,21 @@ func (b *Builder) BuildWorkloadWITSVIDClaims(ctx context.Context, params Workloa
 	}
 
 	return claims, nil
+}
+
+// cnfJWK serializes the WIT-SVID confirmation key. ML-DSA keys use the RFC
+// 9964 AKP encoding because go-jose cannot marshal them; classical keys keep
+// the existing representation.
+func cnfJWK(publicKey jose.JSONWebKey) (any, error) {
+	mlDSAKey, ok := publicKey.Key.(*mldsa.PublicKey)
+	if !ok {
+		return publicKey, nil
+	}
+	encoded, err := pqjose.MarshalPublicJWKNoKeyID(mlDSAKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode cnf.jwk: %w", err)
+	}
+	return json.RawMessage(encoded), nil
 }
 
 func (b *Builder) buildX509CATemplate(publicKey crypto.PublicKey, parentChain []*x509.Certificate, ttl time.Duration, expirationCap time.Time) (*x509.Certificate, error) {

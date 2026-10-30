@@ -168,6 +168,14 @@ func Marshal(bundle *spiffebundle.Bundle, opts ...MarshalOption) ([]byte, error)
 
 	if !c.noWITSVIDKeys {
 		for keyID, witSigningKey := range bundle.WITAuthorities() {
+			if publicKey, ok := witSigningKey.(*mldsa.PublicKey); ok {
+				encoded, err := pqjose.MarshalPublicJWKWithUse(keyID, maybeUse(witSVIDUse), publicKey)
+				if err != nil {
+					return nil, err
+				}
+				keys = append(keys, json.RawMessage(encoded))
+				continue
+			}
 			keys = append(keys, jose.JSONWebKey{
 				Key:   witSigningKey,
 				KeyID: keyID,

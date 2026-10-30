@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire/pkg/common/pqjose"
 	"github.com/spiffe/spire/pkg/common/telemetry"
@@ -203,4 +204,93 @@ func TestMLDSA65JWTSVIDIssuance(t *testing.T) {
 	serverCA.SetJWTKey(&JWTKey{Signer: classicalKey, Kid: "classical", NotAfter: mockClock.Now().Add(time.Hour)})
 	_, err = serverCA.SignWorkloadJWTSVID(t.Context(), WorkloadJWTSVIDParams{SPIFFEID: id, TTL: time.Minute, Audience: []string{"audience.test"}})
 	require.ErrorContains(t, err, "strict PQ policy")
+}
+
+// TestMLDSA65WITSVIDIssuance exercises ML-DSA-65 WIT-SVID signing, cnf.jwk
+// binding and validation.
+func TestMLDSA65WITSVIDIssuance(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("pq.example")
+	id := spiffeid.RequireFromPath(td, "/workload")
+	mockClock := clock.NewMock(t)
+	mockClock.Set(time.Now().Truncate(time.Second).UTC())
+
+	builder, err := credtemplate.NewBuilder(credtemplate.Config{
+		TrustDomain:   td,
+		Clock:         mockClock,
+		X509CASubject: pkix.Name{CommonName: "ML-DSA TEST CA"},
+		X509CATTL:     10 * time.Minute,
+		X509SVIDTTL:   time.Minute,
+		WITSVIDTTL:    time.Minute,
+	})
+	require.NoError(t, err)
+	validator, err := credvalidator.New(credvalidator.Config{TrustDomain: td, Clock: mockClock})
+	require.NoError(t, err)
+	serverCA := NewCA(Config{
+		Clock:         mockClock,
+		Metrics:       telemetry.Blackhole{},
+		TrustDomain:   td,
+		CredBuilder:   builder,
+		CredValidator: validator,
+		HealthChecker: fakehealthchecker.New(),
+		StrictPQ:      true,
+	})
+
+	witKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	serverCA.SetWITKey(&WITKey{Signer: witKey, Kid: "wit-key-1", NotAfter: mockClock.Now().Add(time.Hour)})
+	workloadKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+
+	token, err := serverCA.SignWorkloadWITSVID(t.Context(), WorkloadWITSVIDParams{
+		SPIFFEID: id,
+		TTL:      time.Minute,
+		PublicKey: jose.JSONWebKey{
+			Algorithm: "ML-DSA-65",
+			Key:       workloadKey.Public(),
+		},
+	})
+	require.NoError(t, err)
+
+	parsed, err := pqjose.ParseJWTWithTypes(token, "wit+jwt")
+	require.NoError(t, err)
+	require.Equal(t, "wit+jwt", parsed.Header().Type)
+	require.Equal(t, "wit-key-1", parsed.Header().KeyID)
+	require.NoError(t, parsed.Verify(witKey.PublicKey()))
+
+	var claims struct {
+		Subject string         `json:"sub"`
+		CNF     map[string]any `json:"cnf"`
+	}
+	require.NoError(t, json.Unmarshal(parsed.Claims(), &claims))
+	require.Equal(t, id.String(), claims.Subject)
+	jwk, ok := claims.CNF["jwk"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "AKP", jwk["kty"])
+	require.Equal(t, "ML-DSA-65", jwk["alg"])
+	_, cnfKey, err := pqjose.ParsePublicJWK(mustJSON(t, jwk))
+	require.NoError(t, err)
+	require.True(t, cnfKey.Equal(workloadKey.PublicKey()))
+
+	require.NoError(t, validator.ValidateWorkloadWITSVID(token, id))
+
+	// Strict PQ refuses a classical WIT signer.
+	classicalKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serverCA.SetWITKey(&WITKey{Signer: classicalKey, Kid: "classical", NotAfter: mockClock.Now().Add(time.Hour)})
+	_, err = serverCA.SignWorkloadWITSVID(t.Context(), WorkloadWITSVIDParams{
+		SPIFFEID: id,
+		TTL:      time.Minute,
+		PublicKey: jose.JSONWebKey{
+			Algorithm: "ES256",
+			Key:       workloadKey.Public(),
+		},
+	})
+	require.ErrorContains(t, err, "strict PQ policy")
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
 }

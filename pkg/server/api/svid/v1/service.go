@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
@@ -732,6 +733,10 @@ func parseAndCheckCSR(ctx context.Context, csrBytes []byte) (*x509.CertificateRe
 
 func ValidatePublicKeyAndSigningAlgorithm(publicKey crypto.PublicKey, signingAlgorithm string) error {
 	switch publicKey := publicKey.(type) {
+	case *mldsa.PublicKey:
+		if signingAlgorithm != "ML-DSA-65" || publicKey.Parameters() != mldsa.MLDSA65() {
+			return fmt.Errorf("unsupported signing algorithm for ML-DSA-65 key: %s", signingAlgorithm)
+		}
 	case *rsa.PublicKey:
 		if !slices.Contains(supportedRSAWITSigningAlgorithms, signingAlgorithm) {
 			return fmt.Errorf("unsupported signing algorithm for RSA key: %s", signingAlgorithm)
