@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+	"github.com/spiffe/go-spiffe/v2/spiffegrpc/grpccredentials"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	attestor "github.com/spiffe/spire/pkg/agent/attestor/workload"
@@ -146,12 +147,12 @@ func (e *Endpoints) ListenAndServe(ctx context.Context) error {
 	// In comparison to the admin endpoints, this API is secured by mutual TLS using X.509 SVIDs.
 	// Clients of this API are expected to use the Workload API to obtain their SVIDs first.
 	// This is to accommodate environments where this API is served over network.
-	tlsConfig, err := buildListenerTLSConfig(e.c)
+	transport, err := buildListenerCredentials(e.c)
 	if err != nil {
 		return err
 	}
 	server := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(tlsConfig)),
+		grpc.Creds(transport),
 		grpc.UnaryInterceptor(unaryInterceptor),
 		grpc.StreamInterceptor(streamInterceptor),
 	)
@@ -310,17 +311,15 @@ func brokerIDsAsSPIFFEIDs(brokers []Broker) ([]spiffeid.ID, error) {
 	return ids, nil
 }
 
-func buildListenerTLSConfig(c *Config) (*tls.Config, error) {
+func buildListenerCredentials(c *Config) (credentials.TransportCredentials, error) {
 	brokerIDs, err := brokerIDsAsSPIFFEIDs(c.Brokers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse broker IDs: %w", err)
 	}
-	tlsConfig := tlsconfig.MTLSServerConfig(c.SVIDSource, c.BundleSource, tlsconfig.AuthorizeOneOf(brokerIDs...))
-	// Disable session ticket resumption so the peer-authorization callback
-	// runs on every connection — same rationale as the SPIRE server endpoint.
-	tlsConfig.SessionTicketsDisabled = true
-	if err := tlspolicy.ApplyPolicy(tlsConfig, c.TLSPolicy, tlspolicy.WithServerTLSConfig()); err != nil {
+	base := &tls.Config{SessionTicketsDisabled: true}
+	if err := tlspolicy.ApplyPolicy(base, c.TLSPolicy, tlspolicy.WithServerTLSConfig()); err != nil {
 		return nil, fmt.Errorf("failed to apply TLS policy: %w", err)
 	}
-	return tlsConfig, nil
+	return grpccredentials.MTLSServerCredentials(c.SVIDSource, c.BundleSource,
+		tlsconfig.AuthorizeOneOf(brokerIDs...), tlsconfig.WithBaseTLSConfig(base)), nil
 }

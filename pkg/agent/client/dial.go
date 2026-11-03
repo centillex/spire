@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+	"github.com/spiffe/go-spiffe/v2/spiffegrpc/grpccredentials"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
@@ -53,21 +54,23 @@ func NewServerGRPCClient(config ServerClientConfig) (*grpc.ClientConn, error) {
 	}
 	authorizer := tlsconfig.AuthorizeID(serverID)
 
-	var tlsConfig *tls.Config
-	if config.GetAgentCertificate == nil {
-		tlsConfig = tlsconfig.TLSClientConfig(bundleSource, authorizer)
-	} else {
-		tlsConfig = tlsconfig.MTLSClientConfig(newX509SVIDSource(config.GetAgentCertificate), bundleSource, authorizer)
-	}
-
-	err = tlspolicy.ApplyPolicy(tlsConfig, config.TLSPolicy)
-	if err != nil {
+	// Snapshot preferences before constructing the SDK-owned credentials. The
+	// strict profile overrides version/KEM/authentication/session preferences.
+	base := &tls.Config{}
+	if err := tlspolicy.ApplyPolicy(base, config.TLSPolicy); err != nil {
 		return nil, err
+	}
+	option := tlsconfig.WithBaseTLSConfig(base)
+	var transport credentials.TransportCredentials
+	if config.GetAgentCertificate == nil {
+		transport = grpccredentials.TLSClientCredentials(bundleSource, authorizer, option)
+	} else {
+		transport = grpccredentials.MTLSClientCredentials(newX509SVIDSource(config.GetAgentCertificate), bundleSource, authorizer, option)
 	}
 
 	dialOpts := config.dialOpts
 	if dialOpts == nil {
-		dialOpts = DialOptions(config.Address, config.LoadBalancingConfig, tlsConfig)
+		dialOpts = dialOptionsWithCredentials(config.Address, config.LoadBalancingConfig, transport)
 	}
 
 	client, err := grpc.NewClient(config.Address, dialOpts...)
@@ -78,11 +81,17 @@ func NewServerGRPCClient(config ServerClientConfig) (*grpc.ClientConn, error) {
 	return client, nil
 }
 
-// DialOptions returns the gRPC dial options used to connect to the SPIRE server.
+// DialOptions preserves the explicit legacy insecure-bootstrap caller. The
+// strict agent rejects insecure bootstrap during configuration; authenticated
+// connections use SDK-owned credentials in NewServerGRPCClient, never this path.
 func DialOptions(address, loadBalancingConfig string, tlsConfig *tls.Config) []grpc.DialOption {
+	return dialOptionsWithCredentials(address, loadBalancingConfig, credentials.NewTLS(tlsConfig))
+}
+
+func dialOptionsWithCredentials(address, loadBalancingConfig string, transport credentials.TransportCredentials) []grpc.DialOption {
 	dialOpts := []grpc.DialOption{
 		grpc.WithDefaultServiceConfig(MakeServiceConfigJSON(loadBalancingConfig)),
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithTransportCredentials(transport),
 	}
 	// The xds resolver delivers its routing and load balancing policy as a
 	// service config; disabling service config would make xDS targets unusable.
@@ -122,6 +131,9 @@ func newX509SVIDSource(getter func() *tls.Certificate) x509svid.Source {
 
 func (s *x509SVIDSource) GetX509SVID() (*x509svid.SVID, error) {
 	tlsCert := s.getter()
+	if tlsCert == nil || len(tlsCert.Certificate) == 0 {
+		return nil, fmt.Errorf("agent certificate is unavailable")
+	}
 
 	certificates, err := x509util.RawCertsToCertificates(tlsCert.Certificate)
 	if err != nil {

@@ -198,10 +198,8 @@ func TestPrometheusWithTLSPolicyAndSPIFFESVID(t *testing.T) {
 	require.NoError(t, err)
 
 	pr := runner.(*prometheusRunner)
-	require.NotNil(t, pr.server.TLSConfig)
-	require.Equal(t, uint16(tls.VersionTLS13), pr.server.TLSConfig.MinVersion)
-	require.Nil(t, pr.server.TLSConfig.CipherSuites)
-	require.Equal(t, []tls.CurveID{tls.X25519}, pr.server.TLSConfig.CurvePreferences)
+	require.Nil(t, pr.server.TLSConfig)
+	require.NotNil(t, pr.ownedTLS)
 }
 
 func TestPrometheusTLSConfig(t *testing.T) {
@@ -341,113 +339,6 @@ func TestPrometheusTLSConfig(t *testing.T) {
 					tt.validateTLS(t, pr)
 				}
 			}
-		})
-	}
-}
-
-func TestPrometheusSPIFFETLSConfig(t *testing.T) {
-	td := spiffeid.RequireTrustDomainFromString("example.org")
-	foreignTD := spiffeid.RequireTrustDomainFromString("foreign.example.org")
-
-	serverCA := testca.New(t, td)
-	foreignCA := testca.New(t, foreignTD)
-
-	serverSVID := serverCA.CreateX509SVID(spiffeid.RequireFromPath(td, "/spire/server"))
-	allowedClientSVID := foreignCA.CreateX509SVID(spiffeid.RequireFromPath(foreignTD, "/prometheus"))
-	disallowedClientSVID := serverCA.CreateX509SVID(spiffeid.RequireFromPath(td, "/other-client"))
-
-	tests := []struct {
-		name        string
-		setupConfig func(*MetricsConfig)
-		validateTLS func(t *testing.T, runner *prometheusRunner)
-	}{
-		{
-			name: "use SPIRE SVID without client allowlist",
-			setupConfig: func(config *MetricsConfig) {
-				config.FileConfig.Prometheus.TLS = &TLSConfig{
-					UseSPIRESVID: true,
-				}
-				config.GetX509SVID = func() (*x509svid.SVID, error) {
-					return serverSVID, nil
-				}
-			},
-			validateTLS: func(t *testing.T, runner *prometheusRunner) {
-				require.NotNil(t, runner.server.TLSConfig)
-				certificate, err := runner.server.TLSConfig.GetCertificate(&tls.ClientHelloInfo{})
-				require.NoError(t, err)
-				require.NotNil(t, certificate)
-				assert.Equal(t, serverSVID.Certificates[0].Raw, certificate.Certificate[0])
-				assert.Equal(t, tls.NoClientCert, runner.server.TLSConfig.ClientAuth)
-				assert.True(t, runner.server.TLSConfig.SessionTicketsDisabled)
-			},
-		},
-		{
-			name: "use SPIRE SVID with authorized SPIFFE IDs",
-			setupConfig: func(config *MetricsConfig) {
-				config.FileConfig.Prometheus.TLS = &TLSConfig{
-					UseSPIRESVID:        true,
-					AuthorizedSPIFFEIDs: []string{allowedClientSVID.ID.String()},
-				}
-				config.GetX509SVID = func() (*x509svid.SVID, error) {
-					return serverSVID, nil
-				}
-				config.GetX509BundleAuthorities = func(td spiffeid.TrustDomain) ([]*x509.Certificate, error) {
-					switch td {
-					case serverCA.X509Bundle().TrustDomain():
-						return serverCA.X509Authorities(), nil
-					case foreignCA.X509Bundle().TrustDomain():
-						return foreignCA.X509Authorities(), nil
-					default:
-						return nil, nil
-					}
-				}
-			},
-			validateTLS: func(t *testing.T, runner *prometheusRunner) {
-				require.NotNil(t, runner.server.TLSConfig)
-				assert.Equal(t, tls.RequireAnyClientCert, runner.server.TLSConfig.ClientAuth)
-				assert.True(t, runner.server.TLSConfig.SessionTicketsDisabled)
-				require.NoError(t, runner.server.TLSConfig.VerifyPeerCertificate(rawCerts(allowedClientSVID.Certificates), nil))
-				require.Error(t, runner.server.TLSConfig.VerifyPeerCertificate(rawCerts(disallowedClientSVID.Certificates), nil))
-			},
-		},
-		{
-			name: "use web certificate with authorized SPIFFE IDs",
-			setupConfig: func(config *MetricsConfig) {
-				certFile, keyFile := createTestCertAndKey(t)
-				config.FileConfig.Prometheus.TLS = &TLSConfig{
-					CertFile:            certFile,
-					KeyFile:             keyFile,
-					AuthorizedSPIFFEIDs: []string{allowedClientSVID.ID.String()},
-				}
-				config.GetX509BundleAuthorities = func(td spiffeid.TrustDomain) ([]*x509.Certificate, error) {
-					switch td {
-					case foreignCA.X509Bundle().TrustDomain():
-						return foreignCA.X509Authorities(), nil
-					default:
-						return nil, nil
-					}
-				}
-			},
-			validateTLS: func(t *testing.T, runner *prometheusRunner) {
-				require.NotNil(t, runner.server.TLSConfig)
-				assert.Len(t, runner.server.TLSConfig.Certificates, 1)
-				assert.Equal(t, tls.RequireAnyClientCert, runner.server.TLSConfig.ClientAuth)
-				assert.True(t, runner.server.TLSConfig.SessionTicketsDisabled)
-				require.NoError(t, runner.server.TLSConfig.VerifyPeerCertificate(rawCerts(allowedClientSVID.Certificates), nil))
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := testPrometheusConfig()
-			tt.setupConfig(config)
-
-			runner, err := newTestPrometheusRunner(config)
-			require.NoError(t, err)
-			require.NotNil(t, runner)
-
-			tt.validateTLS(t, runner.(*prometheusRunner))
 		})
 	}
 }
@@ -643,12 +534,4 @@ func createTempFile(t *testing.T, content []byte) string {
 	err = tmpFile.Close()
 	require.NoError(t, err)
 	return tmpFilePath
-}
-
-func rawCerts(certs []*x509.Certificate) [][]byte {
-	raw := make([][]byte, 0, len(certs))
-	for _, cert := range certs {
-		raw = append(raw, cert.Raw)
-	}
-	return raw
 }

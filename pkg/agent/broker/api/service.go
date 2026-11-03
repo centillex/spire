@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spiffe/go-spiffe/v2/exp/proto/spiffe/broker"
+	"github.com/spiffe/go-spiffe/v2/spiffegrpc/grpccredentials"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/spire/pkg/agent/api/rpccontext"
 	workloadattestor "github.com/spiffe/spire/pkg/agent/attestor/workload"
@@ -25,7 +26,6 @@ import (
 	"github.com/spiffe/spire/proto/spire/common"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -127,22 +127,10 @@ func isTCPCaller(ctx context.Context) bool {
 }
 
 func (s *Service) getCallerContext(ctx context.Context) (spiffeid.ID, error) {
-	// The broker endpoint configures the gRPC server with plain
-	// credentials.NewTLS (to keep SessionTicketsDisabled and TLS policy
-	// customizations on the *tls.Config). That credentials wrapper exposes
-	// the peer SPIFFE ID via credentials.TLSInfo rather than go-spiffe's
-	// grpccredentials authInfo, so we extract it ourselves here.
-	p, ok := peer.FromContext(ctx)
-	if !ok || p.AuthInfo == nil {
+	// Only the SDK-owned, completed handshake can supply this peer identity.
+	id, ok := grpccredentials.PeerIDFromContext(ctx)
+	if !ok {
 		return spiffeid.ID{}, status.Error(codes.Unauthenticated, "unable to determine caller identity")
-	}
-	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
-	if !ok || tlsInfo.SPIFFEID == nil {
-		return spiffeid.ID{}, status.Error(codes.Unauthenticated, "unable to determine caller identity")
-	}
-	id, err := spiffeid.FromString(tlsInfo.SPIFFEID.String())
-	if err != nil {
-		return spiffeid.ID{}, status.Errorf(codes.Unauthenticated, "invalid caller SPIFFE ID: %v", err)
 	}
 	return id, nil
 }

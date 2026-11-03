@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/url"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/spiffe/spire/pkg/common/telemetry"
 	"github.com/spiffe/spire/proto/spire/common"
 	"github.com/spiffe/spire/test/fakes/fakemetrics"
+	"github.com/spiffe/spire/test/pqca"
 	"github.com/spiffe/spire/test/testca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -191,13 +191,13 @@ func TestAuthorizeReferenceType(t *testing.T) {
 	}
 }
 
-func brokerCallerContext(caller spiffeid.ID) context.Context {
-	spiffeURL, _ := url.Parse(caller.String())
+func brokerCallerContext(t *testing.T, caller spiffeid.ID) context.Context {
+	t.Helper()
 	log, _ := test.NewNullLogger()
 	ctx := rpccontext.WithLogger(context.Background(), log)
 	return peer.NewContext(ctx, &peer.Peer{
 		Addr:     &net.UnixAddr{Name: "/tmp/broker.sock", Net: "unix"},
-		AuthInfo: credentials.TLSInfo{SPIFFEID: spiffeURL},
+		AuthInfo: pqca.PeerAuthInfo(t, caller),
 	})
 }
 
@@ -301,8 +301,13 @@ func TestGetCallerContext(t *testing.T) {
 			expectCode: codes.Unauthenticated,
 		},
 		{
+			name:       "bare TLSInfo cannot assert an owned peer identity",
+			ctx:        peer.NewContext(context.Background(), &peer.Peer{Addr: &net.UnixAddr{Name: "/tmp/broker.sock", Net: "unix"}, AuthInfo: credentials.TLSInfo{SPIFFEID: caller.URL()}}),
+			expectCode: codes.Unauthenticated,
+		},
+		{
 			name:       "valid caller identity",
-			ctx:        brokerCallerContext(caller),
+			ctx:        brokerCallerContext(t, caller),
 			expectCode: codes.OK,
 			expectID:   caller,
 		},
@@ -362,7 +367,7 @@ func TestConstructValidSelectorsFromReference(t *testing.T) {
 			log, _ := test.NewNullLogger()
 			s := New(Config{Attestor: fakeAttestor{selectors: wantSelectors, err: tt.attestErr}})
 
-			selectors, err := s.constructValidSelectorsFromReference(brokerCallerContext(caller), log, tt.ref)
+			selectors, err := s.constructValidSelectorsFromReference(brokerCallerContext(t, caller), log, tt.ref)
 			if tt.expectCode != codes.OK {
 				require.Error(t, err)
 				assert.Equal(t, tt.expectCode, status.Code(err))
@@ -463,7 +468,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 
 	t.Run("attestation error", func(t *testing.T) {
 		s := New(Config{Attestor: fakeAttestor{err: errors.New("boom")}, Metrics: fakemetrics.New()})
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 
 		err := s.SubscribeToX509SVID(&broker.SubscribeToX509SVIDRequest{
@@ -481,7 +486,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 				caller: {Types: map[string]ReferenceTypeAccess{pidType: {}}},
 			},
 		})
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 
 		err := s.SubscribeToX509SVID(&broker.SubscribeToX509SVIDRequest{
@@ -507,7 +512,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 			Metrics:  fakemetrics.New(),
 		})
 
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 		stream := &fakeX509SVIDStream{ctx: ctx, sentCh: make(chan *broker.SubscribeToX509SVIDResponse, 1)}
 
@@ -525,7 +530,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 			Manager:  &fakeManager{subscribeErr: wantErr},
 			Metrics:  fakemetrics.New(),
 		})
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 
 		err := s.SubscribeToX509SVID(&broker.SubscribeToX509SVIDRequest{
@@ -551,7 +556,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 			Metrics:  metrics,
 		})
 
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		stream := &fakeX509SVIDStream{ctx: ctx, sentCh: make(chan *broker.SubscribeToX509SVIDResponse, 1)}
 
 		errCh := make(chan error, 1)
@@ -598,7 +603,7 @@ func TestSubscribeToX509SVID(t *testing.T) {
 			Metrics:  fakemetrics.New(),
 		})
 
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		stream := &fakeX509SVIDStream{ctx: ctx, sentCh: make(chan *broker.SubscribeToX509SVIDResponse, 1)}
 
 		errCh := make(chan error, 1)
@@ -624,7 +629,7 @@ func TestSubscribeToX509Bundles(t *testing.T) {
 
 	t.Run("attestation error", func(t *testing.T) {
 		s := New(Config{Attestor: fakeAttestor{err: errors.New("boom")}})
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 
 		err := s.SubscribeToX509Bundles(&broker.SubscribeToX509BundlesRequest{
@@ -641,7 +646,7 @@ func TestSubscribeToX509Bundles(t *testing.T) {
 			Manager:  &fakeManager{bundleCache: bundleCache},
 		})
 
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		stream := &fakeX509BundlesStream{ctx: ctx, sentCh: make(chan *broker.SubscribeToX509BundlesResponse, 2)}
 
 		errCh := make(chan error, 1)
@@ -806,7 +811,7 @@ func TestFetchJWTSVID(t *testing.T) {
 				AllowedReferenceTypesByCaller: tt.byCaller,
 			})
 
-			resp, err := s.FetchJWTSVID(brokerCallerContext(caller), &broker.FetchJWTSVIDRequest{
+			resp, err := s.FetchJWTSVID(brokerCallerContext(t, caller), &broker.FetchJWTSVIDRequest{
 				Audience:  tt.audience,
 				Reference: &broker.WorkloadReference{Reference: ref(k8sType)},
 			})
@@ -835,7 +840,7 @@ func TestSubscribeToJWTBundles(t *testing.T) {
 
 	t.Run("attestation error", func(t *testing.T) {
 		s := New(Config{Attestor: fakeAttestor{err: errors.New("boom")}})
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		defer cancel()
 
 		err := s.SubscribeToJWTBundles(&broker.SubscribeToJWTBundlesRequest{
@@ -852,7 +857,7 @@ func TestSubscribeToJWTBundles(t *testing.T) {
 			Manager:  &fakeManager{bundleCache: bundleCache},
 		})
 
-		ctx, cancel := context.WithCancel(brokerCallerContext(caller))
+		ctx, cancel := context.WithCancel(brokerCallerContext(t, caller))
 		stream := &fakeJWTBundlesStream{ctx: ctx, sentCh: make(chan *broker.SubscribeToJWTBundlesResponse, 1)}
 
 		errCh := make(chan error, 1)

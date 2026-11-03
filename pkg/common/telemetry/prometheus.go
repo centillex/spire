@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type prometheusRunner struct {
 	c                        *PrometheusConfig
 	log                      logrus.FieldLogger
 	server                   *http.Server
+	ownedTLS                 *tlsconfig.Config
 	sink                     Sink
 	tlsPolicy                tlspolicy.Policy
 	getX509SVID              func() (*x509svid.SVID, error)
@@ -76,14 +78,9 @@ func newPrometheusRunner(c *MetricsConfig) (sinkRunner, error) {
 	}
 
 	if runner.c.TLS != nil {
-		tlsCfg, tlsCfgErr := runner.newTLSConfig()
-		if tlsCfgErr != nil {
-			return runner, fmt.Errorf("failed to create TLS config for Prometheus: %w", tlsCfgErr)
+		if err := runner.configureTLS(); err != nil {
+			return runner, fmt.Errorf("failed to create TLS config for Prometheus: %w", err)
 		}
-		if err := tlspolicy.ApplyPolicy(tlsCfg, runner.tlsPolicy, tlspolicy.WithServerTLSConfig()); err != nil {
-			return runner, fmt.Errorf("failed to apply TLS policy for Prometheus: %w", err)
-		}
-		runner.server.TLSConfig = tlsCfg
 	}
 
 	return runner, nil
@@ -108,11 +105,9 @@ func (p *prometheusRunner) run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		var err error
-		if p.server.TLSConfig != nil {
-			err = p.server.ListenAndServeTLS("", "")
-		} else {
-			err = p.server.ListenAndServe()
+		listener, err := net.Listen("tcp", p.server.Addr)
+		if err == nil {
+			err = p.serve(listener)
 		}
 		if !errors.Is(err, http.ErrServerClosed) {
 			p.log.Warnf("Prometheus listener stopped unexpectedly: %v", err)
@@ -128,53 +123,74 @@ func (p *prometheusRunner) run(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// serve owns the listener in every mode, including configuration errors.
+func (p *prometheusRunner) serve(listener net.Listener) error {
+	defer listener.Close()
+	if p.ownedTLS != nil {
+		// Never fall through to stock TLS or plaintext on an owned-config error.
+		if p.server.TLSConfig != nil {
+			return errors.New("Prometheus SPIFFE listener cannot use a mutable TLSConfig")
+		}
+		secured, err := p.ownedTLS.Listener(listener)
+		if err != nil {
+			return err
+		}
+		defer secured.Close()
+		return p.server.Serve(secured)
+	}
+	if p.server.TLSConfig != nil {
+		return p.server.ServeTLS(listener, "", "")
+	}
+	return p.server.Serve(listener)
+}
+
 func (p *prometheusRunner) requiresTypePrefix() bool {
 	return false
 }
 
-func (p *prometheusRunner) newTLSConfig() (*tls.Config, error) {
+func (p *prometheusRunner) configureTLS() error {
 	if err := p.validateTLSConfig(); err != nil {
-		return nil, err
+		return err
 	}
-
 	authorizedSPIFFEIDs, err := p.authorizedSPIFFEIDs()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	switch {
-	case p.c.TLS.UseSPIRESVID:
-		return p.newSPIFFETLSConfig(authorizedSPIFFEIDs), nil
-	case len(authorizedSPIFFEIDs) > 0:
-		certificate, err := tls.LoadX509KeyPair(p.c.TLS.CertFile, p.c.TLS.KeyFile)
-		if err != nil {
-			return nil, err
-		}
-		return p.newSPIFFEWebTLSConfig(&certificate, authorizedSPIFFEIDs), nil
-	default:
-		certificate, err := tls.LoadX509KeyPair(p.c.TLS.CertFile, p.c.TLS.KeyFile)
-		if err != nil {
-			return nil, err
-		}
-
-		// easier to return the tls config rather than assigning it to the server directly from maintenance perspective
-		tlsCfg := &tls.Config{
-			Certificates: []tls.Certificate{certificate},
-			MinVersion:   tls.VersionTLS12,
-		}
-
-		if p.c.TLS.ClientCAFile != "" {
-			caCertPool, err := util.LoadCertPool(p.c.TLS.ClientCAFile)
-			if err != nil {
-				return nil, err
-			}
-
-			tlsCfg.ClientCAs = caCertPool
-			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
-		}
-
-		return tlsCfg, nil
+	// Apply mutable SPIRE preferences before the SDK takes its snapshot. The
+	// owned configuration overrides authentication, version, KEM and session
+	// settings with the strict profile; preferences cannot weaken that boundary.
+	base := &tls.Config{}
+	if err := tlspolicy.ApplyPolicy(base, p.tlsPolicy, tlspolicy.WithServerTLSConfig()); err != nil {
+		return fmt.Errorf("failed to apply TLS policy for Prometheus: %w", err)
 	}
+	if p.c.TLS.UseSPIRESVID {
+		p.ownedTLS = p.newSPIFFETLSConfig(authorizedSPIFFEIDs, base)
+		return nil
+	}
+
+	certificate, err := tls.LoadX509KeyPair(p.c.TLS.CertFile, p.c.TLS.KeyFile)
+	if err != nil {
+		return err
+	}
+	if len(authorizedSPIFFEIDs) > 0 {
+		p.ownedTLS = p.newSPIFFEWebTLSConfig(&certificate, authorizedSPIFFEIDs, base)
+		return nil
+	}
+
+	// Preserve explicitly configured, non-SPIFFE file-certificate TLS. This is
+	// a separate mode, never a fallback for an owned SPIFFE handshake failure.
+	base.Certificates = []tls.Certificate{certificate}
+	if p.c.TLS.ClientCAFile != "" {
+		caCertPool, err := util.LoadCertPool(p.c.TLS.ClientCAFile)
+		if err != nil {
+			return err
+		}
+		base.ClientCAs = caCertPool
+		base.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	p.server.TLSConfig = base
+	return nil
 }
 
 func (p *prometheusRunner) validateTLSConfig() error {
@@ -206,25 +222,18 @@ func (p *prometheusRunner) authorizedSPIFFEIDs() ([]spiffeid.ID, error) {
 	return authorizedIDs, nil
 }
 
-func (p *prometheusRunner) newSPIFFETLSConfig(authorizedSPIFFEIDs []spiffeid.ID) *tls.Config {
+func (p *prometheusRunner) newSPIFFETLSConfig(authorizedSPIFFEIDs []spiffeid.ID, base *tls.Config) *tlsconfig.Config {
 	svidSource := &telemetryX509SVIDSource{getter: p.getX509SVID}
-	tlsCfg := tlsconfig.TLSServerConfig(svidSource)
 	if len(authorizedSPIFFEIDs) > 0 {
 		bundleSource := &telemetryBundleSource{getter: p.getX509BundleAuthorities}
-		tlsCfg = tlsconfig.MTLSServerConfig(svidSource, bundleSource, tlsconfig.AuthorizeOneOf(authorizedSPIFFEIDs...))
+		return tlsconfig.MTLSServerConfig(svidSource, bundleSource, tlsconfig.AuthorizeOneOf(authorizedSPIFFEIDs...), tlsconfig.WithBaseTLSConfig(base))
 	}
-
-	tlsCfg.MinVersion = tls.VersionTLS12
-	tlsCfg.SessionTicketsDisabled = true
-	return tlsCfg
+	return tlsconfig.TLSServerConfig(svidSource, tlsconfig.WithBaseTLSConfig(base))
 }
 
-func (p *prometheusRunner) newSPIFFEWebTLSConfig(certificate *tls.Certificate, authorizedSPIFFEIDs []spiffeid.ID) *tls.Config {
+func (p *prometheusRunner) newSPIFFEWebTLSConfig(certificate *tls.Certificate, authorizedSPIFFEIDs []spiffeid.ID, base *tls.Config) *tlsconfig.Config {
 	bundleSource := &telemetryBundleSource{getter: p.getX509BundleAuthorities}
-	tlsCfg := tlsconfig.MTLSWebServerConfig(certificate, bundleSource, tlsconfig.AuthorizeOneOf(authorizedSPIFFEIDs...))
-	tlsCfg.MinVersion = tls.VersionTLS12
-	tlsCfg.SessionTicketsDisabled = true
-	return tlsCfg
+	return tlsconfig.MTLSWebServerConfig(certificate, bundleSource, tlsconfig.AuthorizeOneOf(authorizedSPIFFEIDs...), tlsconfig.WithBaseTLSConfig(base))
 }
 
 type telemetryX509SVIDSource struct {
