@@ -1,6 +1,6 @@
 # Building the agent with the owned strict-PQ SDK
 
-The reviewed SDK at `8ce1b3061da276b934ad86ec69f72c1fd13b3c23` deliberately
+The reviewed SDK at `ed8c14cf82c5850eabb36fbc00e73da2b11c8fc0` deliberately
 returns opaque `*tlsconfig.Config` values, not mutable `*crypto/tls.Config`.
 It also wraps gRPC authentication information. SPIRE's older agent callers
 therefore required an API migration, not a compiler-version downgrade.
@@ -20,6 +20,13 @@ therefore required an API migration, not a compiler-version downgrade.
   Broker API authorization reads `grpccredentials.PeerIDFromContext`, not a
   bare `credentials.TLSInfo.SPIFFEID`. Missing/unwrapped identities fail closed;
   reference-type authorization and mandatory security headers remain unchanged.
+
+The authenticated agent uses an opaque `crypto.Signer` from its key-manager
+plugin, not an exported `*mldsa.PrivateKey`. The SDK admits this handle only
+when its native ML-DSA-65 public key matches the signed leaf DER, then requires
+actual ML-DSA proof of possession in TLS CertificateVerify. The client regression
+suite exercises the real plugin facade, including a lost/unavailable signing
+key. No private-key export or native-TLS fallback is used.
 
 TLS preferences are applied before snapshotting. The owned SDK controls protocol,
 KEM, certificate algorithms and session policy. Classical preferences cannot

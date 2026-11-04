@@ -14,6 +14,11 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffegrpc/grpccredentials"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
+	keymanagerv1 "github.com/spiffe/spire-plugin-sdk/proto/spire/plugin/agent/keymanager/v1"
+	"github.com/spiffe/spire/pkg/agent/plugin/keymanager"
+	keymanagerbase "github.com/spiffe/spire/pkg/agent/plugin/keymanager/base"
+	"github.com/spiffe/spire/pkg/common/catalog"
+	"github.com/spiffe/spire/test/plugintest"
 	"github.com/spiffe/spire/test/pqca"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -32,8 +37,8 @@ func TestOwnedServerGRPCClient(t *testing.T) {
 	classicKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	for _, mutual := range []bool{false, true} {
-		for _, scenario := range []string{"valid", "wrong_server_id", "untrusted_server", "classical_server", "classical_kem", "unavailable_agent", "classical_agent"} {
-			if !mutual && (scenario == "unavailable_agent" || scenario == "classical_agent") {
+		for _, scenario := range []string{"valid", "wrong_server_id", "untrusted_server", "classical_server", "classical_kem", "unavailable_agent", "classical_agent", "plugin_agent", "unavailable_plugin_agent"} {
+			if !mutual && (scenario == "unavailable_agent" || scenario == "classical_agent" || scenario == "plugin_agent" || scenario == "unavailable_plugin_agent") {
 				continue
 			}
 			prefix := "bootstrap/"
@@ -99,6 +104,19 @@ func TestOwnedServerGRPCClient(t *testing.T) {
 					if scenario == "classical_agent" {
 						cert = ca.SVID(t, "/spire/agent/x509pop/test", classicKey)
 					}
+					if scenario == "plugin_agent" || scenario == "unavailable_plugin_agent" {
+						// Use the actual opaque plugin facade, not a native private
+						// key fixture. This is the production agent SVID key path.
+						base := keymanagerbase.New(keymanagerbase.Config{})
+						km := new(keymanager.V1)
+						plugintest.Load(t, catalog.MakeBuiltIn("test", keymanagerv1.KeyManagerPluginServer(base)), km)
+						key, err := km.GenerateKey(context.Background(), "agent-svid-A", keymanager.MLDSA65)
+						require.NoError(t, err)
+						cert = ca.SVID(t, "/spire/agent/x509pop/test", key)
+						if scenario == "unavailable_plugin_agent" {
+							base.SetEntries(nil)
+						}
+					}
 					config.GetAgentCertificate = func() *tls.Certificate {
 						if scenario == "unavailable_agent" {
 							return nil
@@ -113,7 +131,7 @@ func TestOwnedServerGRPCClient(t *testing.T) {
 				defer cancel()
 				var remote peer.Peer
 				response, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.Peer(&remote))
-				if scenario != "valid" {
+				if scenario != "valid" && scenario != "plugin_agent" {
 					require.Error(t, err)
 					require.Zero(t, calls.Load())
 					return

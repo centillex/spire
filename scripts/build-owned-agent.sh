@@ -6,7 +6,7 @@ if (( $# > 1 )); then echo 'Usage: build-owned-agent.sh [new-output-directory]' 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 sdk=$(cd "$repo/../go-spiffe" && pwd)
 plugins=$(cd "$repo/../spire-plugin-sdk" && pwd)
-sdk_pin=8ce1b3061da276b934ad86ec69f72c1fd13b3c23
+sdk_pin=ed8c14cf82c5850eabb36fbc00e73da2b11c8fc0
 plugins_pin=29a57d508e75c79c4afacc0b50044c79338ce623
 for path in "$repo" "$sdk" "$plugins"; do
   if [[ -n $(git -C "$path" status --porcelain) ]]; then
